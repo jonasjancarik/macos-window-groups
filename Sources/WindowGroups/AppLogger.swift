@@ -8,6 +8,8 @@ final class AppLogger {
     private var entries: [String] = []
     private let maxEntries = 200
     private let fileURL: URL
+    private let maxLogBytes = 256 * 1024
+    private let keepLogBytes = 128 * 1024
 
     private init() {
         let formatter = DateFormatter()
@@ -16,17 +18,8 @@ final class AppLogger {
         self.formatter = formatter
 
         let fileManager = FileManager.default
-        let logsDir = fileManager.urls(for: .libraryDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent("Logs", isDirectory: true)
-        if let logsDir {
-            try? fileManager.createDirectory(at: logsDir, withIntermediateDirectories: true, attributes: nil)
-            fileURL = logsDir.appendingPathComponent("WindowGroups.log")
-            if !fileManager.fileExists(atPath: fileURL.path) {
-                fileManager.createFile(atPath: fileURL.path, contents: nil)
-            }
-        } else {
-            fileURL = URL(fileURLWithPath: "/tmp/WindowGroups.log")
+        fileURL = URL(fileURLWithPath: "/tmp/WindowGroups.log")
+        if !fileManager.fileExists(atPath: fileURL.path) {
             fileManager.createFile(atPath: fileURL.path, contents: nil)
         }
     }
@@ -69,8 +62,27 @@ final class AppLogger {
             try handle.seekToEnd()
             try handle.write(contentsOf: data)
             try handle.close()
+            trimFileIfNeeded()
         } catch {
             print("Logger write failed: \(error)")
+        }
+    }
+
+    private func trimFileIfNeeded() {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            guard let size = attributes[.size] as? NSNumber else { return }
+            guard size.intValue > maxLogBytes else { return }
+
+            let handle = try FileHandle(forReadingFrom: fileURL)
+            let offset = max(0, size.intValue - keepLogBytes)
+            try handle.seek(toOffset: UInt64(offset))
+            let data = try handle.readToEnd() ?? Data()
+            try handle.close()
+
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            print("Logger trim failed: \(error)")
         }
     }
 }
