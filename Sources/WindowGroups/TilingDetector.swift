@@ -4,6 +4,12 @@ struct TilingDetector {
     var edgeTolerance: CGFloat = 8
     var minOverlapRatio: CGFloat = 0.25
 
+    enum SnapSide {
+        case left
+        case right
+        case none
+    }
+
     func group(for focused: AXWindowInfo, in windows: [AXWindowInfo]) -> [AXWindowInfo] {
         guard let focusedScreenIndex = screenIndex(for: focused.frame) else {
             return [focused]
@@ -74,7 +80,7 @@ struct TilingDetector {
         return groups
     }
 
-    private func screenIndex(for frame: CGRect) -> Int? {
+    func screenIndex(for frame: CGRect) -> Int? {
         let center = CGPoint(x: frame.midX, y: frame.midY)
         for (index, screen) in NSScreen.screens.enumerated() {
             if screen.frame.contains(center) {
@@ -84,7 +90,38 @@ struct TilingDetector {
         return nil
     }
 
-    private func isAdjacent(_ a: CGRect, _ b: CGRect) -> Bool {
+    func screen(for frame: CGRect) -> NSScreen? {
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        for screen in NSScreen.screens {
+            if screen.frame.contains(center) {
+                return screen
+            }
+        }
+        return nil
+    }
+
+    func snapSide(for window: AXWindowInfo) -> SnapSide {
+        guard let screen = screen(for: window.frame) else { return .none }
+        let visible = screen.visibleFrame
+        let frame = window.frame
+        let heightRatio = frame.height / max(1, visible.height)
+        guard heightRatio >= 0.8 else { return .none }
+
+        let widthRatio = frame.width / max(1, visible.width)
+        guard widthRatio >= 0.35, widthRatio <= 0.7 else { return .none }
+
+        let sideTolerance = max(12, edgeTolerance * 2)
+        if abs(frame.minX - visible.minX) <= sideTolerance {
+            return .left
+        }
+        if abs(frame.maxX - visible.maxX) <= sideTolerance {
+            return .right
+        }
+
+        return .none
+    }
+
+    func isAdjacent(_ a: CGRect, _ b: CGRect) -> Bool {
         let intersection = a.intersection(b)
         if intersection.width > edgeTolerance && intersection.height > edgeTolerance {
             return false

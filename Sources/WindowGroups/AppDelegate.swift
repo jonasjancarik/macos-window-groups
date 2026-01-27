@@ -12,11 +12,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlapSlider: NSSlider?
     private var edgeValueLabel: NSTextField?
     private var overlapValueLabel: NSTextField?
+    private var nonActivatingItem: NSMenuItem?
+    private var includeSpacesItem: NSMenuItem?
+    private var indicatorResetWork: DispatchWorkItem?
+    private let statusTitle = "WG"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        controller.onGroupChange = { [weak self] group in
+            self?.showGroupIndicator(for: group)
+        }
         controller.start()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem?.button?.title = "WG"
+        statusItem?.button?.title = statusTitle
         statusItem?.menu = buildMenu()
     }
 
@@ -29,6 +36,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func requestAccessibility(_ sender: NSMenuItem) {
         _ = controller.requestAccessibility(prompt: true)
         refreshPermissionMenuItem()
+    }
+
+    @objc private func toggleNonActivatingRaise(_ sender: NSMenuItem) {
+        let next = sender.state == .off
+        controller.setNonActivatingRaiseEnabled(next)
+        sender.state = next ? .on : .off
+    }
+
+    @objc private func toggleIncludeSpaces(_ sender: NSMenuItem) {
+        let next = sender.state == .off
+        controller.setIncludeAllSpacesEnabled(next)
+        sender.state = next ? .on : .off
     }
 
     @objc private func edgeToleranceChanged(_ sender: NSSlider) {
@@ -86,12 +105,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(enableItem)
         self.enableItem = enableItem
 
+        let nonActivatingItem = NSMenuItem(
+            title: "Keep Cmd-Tab Order (experimental)",
+            action: #selector(toggleNonActivatingRaise(_:)),
+            keyEquivalent: ""
+        )
+        nonActivatingItem.state = controller.isNonActivatingRaiseEnabled ? .on : .off
+        nonActivatingItem.target = self
+        menu.addItem(nonActivatingItem)
+        self.nonActivatingItem = nonActivatingItem
+
+        let includeSpacesItem = NSMenuItem(
+            title: "Include other spaces (experimental)",
+            action: #selector(toggleIncludeSpaces(_:)),
+            keyEquivalent: ""
+        )
+        includeSpacesItem.state = controller.isIncludeAllSpacesEnabled ? .on : .off
+        includeSpacesItem.target = self
+        menu.addItem(includeSpacesItem)
+        self.includeSpacesItem = includeSpacesItem
+
         let edgeItem = buildSliderItem(
             title: "Edge tolerance",
             min: 2,
             max: 40,
             value: controller.edgeToleranceValue,
-            action: #selector(edgeToleranceChanged(_:))
+            action: #selector(edgeToleranceChanged(_:)),
+            assign: { slider, label in
+                self.edgeToleranceSlider = slider
+                self.edgeValueLabel = label
+            }
         )
         menu.addItem(edgeItem)
 
@@ -100,7 +143,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             min: 0.1,
             max: 0.9,
             value: controller.minOverlapRatioValue,
-            action: #selector(overlapChanged(_:))
+            action: #selector(overlapChanged(_:)),
+            assign: { slider, label in
+                self.overlapSlider = slider
+                self.overlapValueLabel = label
+            }
         )
         menu.addItem(overlapItem)
 
@@ -143,6 +190,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         refreshPermissionMenuItem()
         syncSliderValues()
+        syncNonActivatingToggle()
+        syncIncludeSpacesToggle()
         refreshGroupsMenu()
         refreshLogsMenu()
     }
@@ -163,6 +212,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let overlapValue = controller.minOverlapRatioValue
         overlapSlider?.doubleValue = overlapValue
         overlapValueLabel?.stringValue = formatOverlapValue(overlapValue)
+    }
+
+    private func syncNonActivatingToggle() {
+        nonActivatingItem?.state = controller.isNonActivatingRaiseEnabled ? .on : .off
+    }
+
+    private func syncIncludeSpacesToggle() {
+        includeSpacesItem?.state = controller.isIncludeAllSpacesEnabled ? .on : .off
     }
 
     private func refreshGroupsMenu() {
@@ -233,7 +290,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         min: Double,
         max: Double,
         value: Double,
-        action: Selector
+        action: Selector,
+        assign: (NSSlider, NSTextField) -> Void
     ) -> NSMenuItem {
         let menuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 46))
@@ -256,13 +314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         view.addSubview(slider)
         menuItem.view = view
 
-        if title == "Edge tolerance" {
-            edgeToleranceSlider = slider
-            edgeValueLabel = valueLabel
-        } else {
-            overlapSlider = slider
-            overlapValueLabel = valueLabel
-        }
+        assign(slider, valueLabel)
 
         return menuItem
     }
@@ -286,5 +338,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let nameList = names.prefix(3).joined(separator: ", ")
         let suffix = names.count > 3 ? " +\(names.count - 3)" : ""
         return "\(group.count) windows - \(nameList)\(suffix)"
+    }
+
+    private func showGroupIndicator(for group: [AXWindowInfo]) {
+        guard let button = statusItem?.button else { return }
+        indicatorResetWork?.cancel()
+
+        let count = group.count
+        button.title = "\(statusTitle) \(count)"
+
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.statusItem?.button?.title = self.statusTitle
+        }
+        indicatorResetWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
     }
 }

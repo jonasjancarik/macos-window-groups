@@ -5,6 +5,7 @@ final class WindowGroupController {
     private let eventQueue = DispatchQueue(label: "WindowGroups.eventQueue")
     private let windowProvider = WindowListProvider()
     private let logger = AppLogger.shared
+    private let layoutGroups = LayoutGroupState()
     private var detector: TilingDetector
 
     private var suppressionUntil = Date.distantPast
@@ -12,7 +13,8 @@ final class WindowGroupController {
     private var observer: AXObserver?
     private var observedPID: pid_t?
     private var lastGroupKey: String?
-    private var lastFocusedWindowIdentifier: UInt?
+    private var lastTriggeredFocusedWindowIdentifier: UInt?
+    private var previousFocusedWindowIdentifier: UInt?
     private var lastActivePID: pid_t?
     private var lastActiveAppName: String?
     private var autoTimer: DispatchSourceTimer?
@@ -22,10 +24,17 @@ final class WindowGroupController {
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
     private let overlapRatioKey = "WindowGroups.minOverlapRatio"
+    private let nonActivatingRaiseKey = "WindowGroups.nonActivatingRaise"
+    private let includeAllSpacesKey = "WindowGroups.includeAllSpaces"
     private let defaultEdgeTolerance: CGFloat = 8
     private let defaultOverlapRatio: CGFloat = 0.25
 
     private var loggedPermissionDenied = false
+    private var loggedOrdererUnavailable = false
+    private var loggedFocusedMappingMissing = false
+    private var loggedNeighborMappingMissing = false
+
+    var onGroupChange: (([AXWindowInfo]) -> Void)?
 
     init() {
         let edgeValue = UserDefaults.standard.object(forKey: edgeToleranceKey) as? Double
@@ -54,11 +63,21 @@ final class WindowGroupController {
         Double(detector.minOverlapRatio)
     }
 
+    var isNonActivatingRaiseEnabled: Bool {
+        UserDefaults.standard.object(forKey: nonActivatingRaiseKey) as? Bool ?? false
+    }
+
+    var isIncludeAllSpacesEnabled: Bool {
+        UserDefaults.standard.object(forKey: includeAllSpacesKey) as? Bool ?? false
+    }
+
     func start() {
         let trusted = requestAccessibility(prompt: true)
         logger.log("Start. Accessibility trusted: \(trusted).")
         logger.log("Tiling config. Edge tolerance: \(edgeToleranceValue). Min overlap: \(minOverlapRatioValue).")
         logger.log("Log file: \(logger.logFileURL.path).")
+        logger.log("Non-activating raise: \(isNonActivatingRaiseEnabled).")
+        logger.log("Include other spaces: \(isIncludeAllSpacesEnabled).")
         subscribeWorkspaceNotifications()
         refreshObserverForFrontmostApp()
         startAutoDiagnostics()
@@ -92,10 +111,22 @@ final class WindowGroupController {
         logger.log("Min overlap ratio set to \(value).")
     }
 
+    func setNonActivatingRaiseEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: nonActivatingRaiseKey)
+        logger.log("Non-activating raise set to \(enabled).")
+    }
+
+    func setIncludeAllSpacesEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: includeAllSpacesKey)
+        logger.log("Include other spaces set to \(enabled).")
+    }
+
     func currentGroups() -> [[AXWindowInfo]] {
         guard isAccessibilityTrusted else { return [] }
-        let windows = windowProvider.visibleWindows()
-        return detector.groups(in: windows).filter { $0.count > 1 }
+        return eventQueue.sync {
+            let windows = visibleWindows()
+            return layoutGroups.groups(in: windows).filter { $0.count > 1 }
+        }
     }
 
     func dumpVisibleWindows() {
@@ -104,7 +135,7 @@ final class WindowGroupController {
             return
         }
 
-        let windows = windowProvider.visibleWindows()
+        let windows = visibleWindows()
         logger.log("Visible windows: \(windows.count).")
         for window in windows {
             logger.log("Window \(windowLabel(window)) frame \(formatFrame(window.frame)).")
@@ -132,8 +163,16 @@ final class WindowGroupController {
         }
 
         logger.log("Focused window: \(windowLabel(focusedWindow)) frame \(formatFrame(focusedWindow.frame)).")
-        let windows = windowProvider.visibleWindows()
-        let adjacent = detector.adjacentWindows(to: focusedWindow, in: windows)
+        let (adjacent, group, fallbackGroup) = eventQueue.sync {
+            let windows = visibleWindows()
+            let adjacent = detector.adjacentWindows(to: focusedWindow, in: windows)
+            let group = layoutGroups.group(for: focusedWindow, in: windows)
+            if group.count <= 1 {
+                let fallback = detector.group(for: focusedWindow, in: windows)
+                return (adjacent, fallback, fallback.count > 1 ? fallback : nil)
+            }
+            return (adjacent, group, nil)
+        }
         if adjacent.isEmpty {
             logger.log("Adjacent windows: none.")
         } else {
@@ -141,8 +180,10 @@ final class WindowGroupController {
             logger.log("Adjacent windows: \(summary).")
         }
 
-        let group = detector.group(for: focusedWindow, in: windows)
         logger.log("Group size: \(group.count).")
+        if let fallbackGroup, fallbackGroup.count > 1 {
+            logger.log("Fallback group size: \(fallbackGroup.count).")
+        }
     }
 
     func dumpWindowDiagnostics() {
@@ -244,9 +285,6 @@ final class WindowGroupController {
 
     private func autoDiagnosticsTick() {
         let now = Date()
-        guard now.timeIntervalSince(lastAutoLog) >= 5 else { return }
-        lastAutoLog = now
-
         guard isAccessibilityTrusted else {
             logger.log("Auto diag. Accessibility not trusted.")
             return
@@ -254,7 +292,11 @@ final class WindowGroupController {
 
         let activeApp = activeAppContext()
         let focused = activeApp.flatMap { focusedWindowInfo(for: $0.pid, appName: $0.name) }
-        let windows = windowProvider.visibleWindows()
+        let windows = visibleWindows()
+        _ = layoutGroups.groups(in: windows, now: now)
+
+        guard now.timeIntervalSince(lastAutoLog) >= 5 else { return }
+        lastAutoLog = now
 
         let activeName = activeApp?.name ?? "n/a"
         let activePid = activeApp?.pid ?? -1
@@ -284,26 +326,44 @@ final class WindowGroupController {
         guard Date() >= suppressionUntil else { return }
 
         guard let focusedWindow = focusedWindowInfo() else { return }
-        let windows = windowProvider.visibleWindows()
-        let group = detector.group(for: focusedWindow, in: windows)
+        defer { previousFocusedWindowIdentifier = focusedWindow.identifier }
+        let windows = visibleWindows()
+        layoutGroups.update(windows: windows)
+        if let previousID = previousFocusedWindowIdentifier,
+           previousID != focusedWindow.identifier,
+           let previousWindow = windows.first(where: { $0.identifier == previousID }) {
+            _ = layoutGroups.registerPairIfEligible(
+                focused: focusedWindow,
+                previous: previousWindow,
+                detector: detector
+            )
+        }
+        let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else { return }
 
         let groupKey = group.map { String($0.identifier) }.sorted().joined(separator: ",")
-        if groupKey == lastGroupKey, focusedWindow.identifier == lastFocusedWindowIdentifier {
+        if groupKey == lastGroupKey, focusedWindow.identifier == lastTriggeredFocusedWindowIdentifier {
             return
         }
 
         logger.log("Group detected. \(groupSummary(group)) Focused: \(windowLabel(focusedWindow)).")
+        DispatchQueue.main.async { [weak self] in
+            self?.onGroupChange?(group)
+        }
         suppressionUntil = Date().addingTimeInterval(0.3)
         bringGroupToFront(group, focusedWindowIdentifier: focusedWindow.identifier)
         lastGroupKey = groupKey
-        lastFocusedWindowIdentifier = focusedWindow.identifier
+        lastTriggeredFocusedWindowIdentifier = focusedWindow.identifier
     }
 
     private func focusedWindowInfo() -> AXWindowInfo? {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         guard app.processIdentifier != getpid() else { return nil }
         return focusedWindowInfo(for: app.processIdentifier, appName: app.localizedName)
+    }
+
+    private func visibleWindows() -> [AXWindowInfo] {
+        windowProvider.visibleWindows(includeOffscreen: isIncludeAllSpacesEnabled)
     }
 
     private func focusedWindowInfo(for pid: pid_t, appName: String?) -> AXWindowInfo? {
@@ -328,16 +388,56 @@ final class WindowGroupController {
     }
 
     private func bringGroupToFront(_ group: [AXWindowInfo], focusedWindowIdentifier: UInt) {
+        guard let focused = group.first(where: { $0.identifier == focusedWindowIdentifier }) else { return }
+
+        if isNonActivatingRaiseEnabled, raiseGroupWithoutActivation(group, focused: focused) {
+            return
+        }
+
         for window in group where window.identifier != focusedWindowIdentifier {
             AXHelpers.raise(window.axElement)
         }
 
-        if let focused = group.first(where: { $0.identifier == focusedWindowIdentifier }) {
-            AXHelpers.raise(focused.axElement)
-            if let app = NSRunningApplication(processIdentifier: focused.pid) {
-                app.activate(options: [.activateIgnoringOtherApps])
+        AXHelpers.raise(focused.axElement)
+        if let app = NSRunningApplication(processIdentifier: focused.pid) {
+            app.activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+
+    private func raiseGroupWithoutActivation(_ group: [AXWindowInfo], focused: AXWindowInfo) -> Bool {
+        guard let orderer = CGSWindowOrderer.shared else {
+            if !loggedOrdererUnavailable {
+                logger.log("Non-activating raise unavailable (CGS symbols missing).")
+                loggedOrdererUnavailable = true
+            }
+            return false
+        }
+
+        let cgEntries = windowProvider.cgWindowEntries()
+        guard let focusedID = windowProvider.matchCGWindowID(for: focused, in: cgEntries) else {
+            if !loggedFocusedMappingMissing {
+                logger.log("Non-activating raise missing CGWindowID for focused \(windowLabel(focused)).")
+                loggedFocusedMappingMissing = true
+            }
+            return false
+        }
+
+        var raisedCount = 0
+        for window in group where window.identifier != focused.identifier {
+            guard let windowID = windowProvider.matchCGWindowID(for: window, in: cgEntries) else {
+                if !loggedNeighborMappingMissing {
+                    logger.log("Non-activating raise missing CGWindowID for neighbor \(windowLabel(window)).")
+                    loggedNeighborMappingMissing = true
+                }
+                continue
+            }
+            if orderer.orderAboveAll(windowID) {
+                raisedCount += 1
             }
         }
+
+        _ = orderer.orderAboveAll(focusedID)
+        return raisedCount > 0
     }
 
     private func groupSummary(_ group: [AXWindowInfo]) -> String {
