@@ -2,8 +2,14 @@ import AppKit
 import ApplicationServices
 
 struct WindowListProvider {
-    func visibleWindows() -> [AXWindowInfo] {
-        let onScreenIDs = onScreenWindowIDs()
+    struct CGWindowEntry {
+        let windowID: CGWindowID
+        let ownerPID: pid_t
+        let bounds: CGRect
+    }
+
+    func visibleWindows(includeOffscreen: Bool = false) -> [AXWindowInfo] {
+        let onScreenIDs = includeOffscreen ? Set<Int>() : onScreenWindowIDs()
 
         let apps = NSWorkspace.shared.runningApplications.filter { app in
             app.activationPolicy == .regular
@@ -44,6 +50,59 @@ struct WindowListProvider {
         }
 
         return windows
+    }
+
+    func cgWindowEntries() -> [CGWindowEntry] {
+        let listInfo = cgWindowInfo()
+        var entries: [CGWindowEntry] = []
+        entries.reserveCapacity(listInfo.count)
+
+        for info in listInfo {
+            guard let layer = info[kCGWindowLayer as String] as? Int, layer == 0 else { continue }
+            guard let isOnscreen = info[kCGWindowIsOnscreen as String] as? Bool, isOnscreen else { continue }
+            guard let windowNumber = info[kCGWindowNumber as String] as? Int else { continue }
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? pid_t else { continue }
+            guard let bounds = boundsRect(from: info[kCGWindowBounds as String]) else { continue }
+            entries.append(
+                CGWindowEntry(
+                    windowID: CGWindowID(windowNumber),
+                    ownerPID: ownerPID,
+                    bounds: bounds
+                )
+            )
+        }
+
+        return entries
+    }
+
+    func matchCGWindowID(for axWindow: AXWindowInfo, in entries: [CGWindowEntry]) -> CGWindowID? {
+        if let windowID = axWindow.windowID {
+            return CGWindowID(windowID)
+        }
+
+        let candidates = entries.filter { $0.ownerPID == axWindow.pid }
+        guard !candidates.isEmpty else { return nil }
+
+        let axCenter = CGPoint(x: axWindow.frame.midX, y: axWindow.frame.midY)
+        let axSize = axWindow.frame.size
+        var best: (id: CGWindowID, score: CGFloat)?
+
+        for candidate in candidates {
+            let center = CGPoint(x: candidate.bounds.midX, y: candidate.bounds.midY)
+            let centerDist = abs(axCenter.x - center.x) + abs(axCenter.y - center.y)
+            let sizeDist = abs(axSize.width - candidate.bounds.width) + abs(axSize.height - candidate.bounds.height)
+            let score = centerDist + sizeDist
+            if let current = best {
+                if score < current.score {
+                    best = (candidate.windowID, score)
+                }
+            } else {
+                best = (candidate.windowID, score)
+            }
+        }
+
+        guard let best else { return nil }
+        return best.score < 80 ? best.id : nil
     }
 
     func dumpDiagnostics(logger: AppLogger) {
@@ -99,15 +158,20 @@ struct WindowListProvider {
         return listInfo
     }
 
-    private func boundsString(from value: Any?) -> String {
+    private func boundsRect(from value: Any?) -> CGRect? {
         guard let bounds = value as? [String: Any],
               let x = bounds["X"] as? Double,
               let y = bounds["Y"] as? Double,
               let w = bounds["Width"] as? Double,
               let h = bounds["Height"] as? Double else {
-            return "n/a"
+            return nil
         }
-        return String(format: "x%.0f y%.0f w%.0f h%.0f", x, y, w, h)
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    private func boundsString(from value: Any?) -> String {
+        guard let rect = boundsRect(from: value) else { return "n/a" }
+        return String(format: "x%.0f y%.0f w%.0f h%.0f", rect.origin.x, rect.origin.y, rect.size.width, rect.size.height)
     }
 
     private func onScreenWindowIDs() -> Set<Int> {
