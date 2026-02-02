@@ -21,6 +21,7 @@ Auto diagnostics now run in the background; just reproduce and share the log fil
 The optional "Keep Cmd-Tab Order" toggle uses private CGS APIs and may not work on all macOS versions.
 The optional "Include other spaces" toggle includes windows from other Spaces (experimental).
 When a group change is detected, the menu bar title briefly shows the group count.
+The optional "Debug Overlay" toggle shows a live log panel on screen.
 
 ## Notes
 

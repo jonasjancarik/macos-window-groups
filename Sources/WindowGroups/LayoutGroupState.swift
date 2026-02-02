@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 
 final class LayoutGroupState {
+    struct PairDecision {
+        let formed: Bool
+        let reason: String
+    }
+
     struct State {
         var frame: CGRect
         var lastMoved: Date
@@ -81,17 +86,28 @@ final class LayoutGroupState {
         focused: AXWindowInfo,
         previous: AXWindowInfo,
         detector: TilingDetector
-    ) -> Bool {
-        guard focused.identifier != previous.identifier else { return false }
-        guard sameScreen(focused, previous, detector: detector) else { return false }
-        guard detector.isAdjacent(focused.frame, previous.frame) else { return false }
-
+    ) -> PairDecision {
         let focusedSide = detector.snapSide(for: focused)
         let previousSide = detector.snapSide(for: previous)
-        guard isOppositeSide(focusedSide, previousSide) else { return false }
+
+        guard focused.identifier != previous.identifier else {
+            return PairDecision(formed: false, reason: "skip: same window")
+        }
+
+        guard sameScreen(focused, previous, detector: detector) else {
+            return PairDecision(formed: false, reason: "skip: different screens (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
+        }
+
+        guard detector.isAdjacent(focused.frame, previous.frame) else {
+            return PairDecision(formed: false, reason: "skip: not adjacent (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
+        }
+
+        guard isOppositeSide(focusedSide, previousSide) else {
+            return PairDecision(formed: false, reason: "skip: not opposite sides (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
+        }
 
         assignGroup(ids: [focused.identifier, previous.identifier])
-        return true
+        return PairDecision(formed: true, reason: "paired: prev focus + \(sideLabel(focusedSide))/\(sideLabel(previousSide))")
     }
 
     private func assignGroup(ids: [UInt]) {
@@ -133,6 +149,17 @@ final class LayoutGroupState {
             return true
         default:
             return false
+        }
+    }
+
+    private func sideLabel(_ side: TilingDetector.SnapSide) -> String {
+        switch side {
+        case .left:
+            return "left"
+        case .right:
+            return "right"
+        case .none:
+            return "none"
         }
     }
 

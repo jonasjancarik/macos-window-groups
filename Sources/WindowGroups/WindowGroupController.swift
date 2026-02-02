@@ -329,14 +329,19 @@ final class WindowGroupController {
         defer { previousFocusedWindowIdentifier = focusedWindow.identifier }
         let windows = visibleWindows()
         layoutGroups.update(windows: windows)
+        var pairingDecision: LayoutGroupState.PairDecision?
         if let previousID = previousFocusedWindowIdentifier,
            previousID != focusedWindow.identifier,
            let previousWindow = windows.first(where: { $0.identifier == previousID }) {
-            _ = layoutGroups.registerPairIfEligible(
+            let decision = layoutGroups.registerPairIfEligible(
                 focused: focusedWindow,
                 previous: previousWindow,
                 detector: detector
             )
+            pairingDecision = decision
+            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Prev: \(windowLabel(previousWindow)) -> \(decision.reason).")
+        } else {
+            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Prev: none -> skip: no previous focus.")
         }
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else { return }
@@ -346,7 +351,9 @@ final class WindowGroupController {
             return
         }
 
-        logger.log("Group detected. \(groupSummary(group)) Focused: \(windowLabel(focusedWindow)).")
+        let reason = pairingDecision?.formed == true ? pairingDecision?.reason ?? "paired" : "existing pair"
+        logger.log("Group detected. \(groupSummary(group)) Focused: \(windowLabel(focusedWindow)). Reason: \(reason).")
+        logger.log("Group windows: \(groupWindowList(group)).")
         DispatchQueue.main.async { [weak self] in
             self?.onGroupChange?(group)
         }
@@ -445,6 +452,10 @@ final class WindowGroupController {
         let nameList = names.prefix(3).joined(separator: ", ")
         let suffix = names.count > 3 ? " +\(names.count - 3)" : ""
         return "\(group.count) windows: \(nameList)\(suffix)."
+    }
+
+    private func groupWindowList(_ group: [AXWindowInfo]) -> String {
+        group.map { windowLabel($0) }.joined(separator: ", ")
     }
 
     private func uniqueNames(from group: [AXWindowInfo]) -> [String] {

@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var overlapValueLabel: NSTextField?
     private var nonActivatingItem: NSMenuItem?
     private var includeSpacesItem: NSMenuItem?
+    private var debugOverlayItem: NSMenuItem?
+    private var debugOverlayController: DebugOverlayController?
     private var indicatorResetWork: DispatchWorkItem?
     private let statusTitle = "WG"
 
@@ -48,6 +50,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let next = sender.state == .off
         controller.setIncludeAllSpacesEnabled(next)
         sender.state = next ? .on : .off
+    }
+
+    @objc private func toggleDebugOverlay(_ sender: NSMenuItem) {
+        let overlay = debugOverlayController ?? DebugOverlayController()
+        debugOverlayController = overlay
+        overlay.toggle()
+        sender.state = overlay.isVisible ? .on : .off
     }
 
     @objc private func edgeToleranceChanged(_ sender: NSSlider) {
@@ -163,6 +172,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(logsItem)
         self.logsItem = logsItem
 
+        let debugOverlayItem = NSMenuItem(
+            title: "Debug Overlay",
+            action: #selector(toggleDebugOverlay(_:)),
+            keyEquivalent: ""
+        )
+        debugOverlayItem.target = self
+        debugOverlayItem.state = debugOverlayController?.isVisible == true ? .on : .off
+        menu.addItem(debugOverlayItem)
+        self.debugOverlayItem = debugOverlayItem
+
         let permissionItem = NSMenuItem(
             title: "Request Accessibility Permission",
             action: #selector(requestAccessibility(_:)),
@@ -192,6 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         syncSliderValues()
         syncNonActivatingToggle()
         syncIncludeSpacesToggle()
+        syncDebugOverlayToggle()
         refreshGroupsMenu()
         refreshLogsMenu()
     }
@@ -220,6 +240,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func syncIncludeSpacesToggle() {
         includeSpacesItem?.state = controller.isIncludeAllSpacesEnabled ? .on : .off
+    }
+
+    private func syncDebugOverlayToggle() {
+        debugOverlayItem?.state = debugOverlayController?.isVisible == true ? .on : .off
     }
 
     private func refreshGroupsMenu() {
