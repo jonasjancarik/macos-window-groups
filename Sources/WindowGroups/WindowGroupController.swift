@@ -157,7 +157,7 @@ final class WindowGroupController {
             logger.log("Manual add skipped: focused window missing.")
             return
         }
-        let windows = visibleWindows()
+        let windows = visibleWindows(includeOffscreen: true)
         layoutGroups.update(windows: windows)
         let existingID = layoutGroups.groupID(for: focusedWindow.identifier)
 
@@ -199,7 +199,7 @@ final class WindowGroupController {
             return
         }
 
-        let windows = visibleWindows()
+        let windows = visibleWindows(includeOffscreen: true)
         for id in memberIDs {
             layoutGroups.addWindow(id, toGroup: groupID)
         }
@@ -423,7 +423,7 @@ final class WindowGroupController {
 
         guard let focusedWindow = focusedWindowInfo() else { return }
         defer { previousFocusedWindowIdentifier = focusedWindow.identifier }
-        let windows = visibleWindows()
+        let windows = visibleWindows(includeOffscreen: manualModeEnabled)
         layoutGroups.update(windows: windows)
         var pairingDecision: LayoutGroupState.PairDecision?
         if !manualModeEnabled {
@@ -496,8 +496,9 @@ final class WindowGroupController {
         return focusedWindowInfo(for: app.processIdentifier, appName: app.localizedName)
     }
 
-    private func visibleWindows() -> [AXWindowInfo] {
-        windowProvider.visibleWindows(includeOffscreen: isIncludeAllSpacesEnabled)
+    private func visibleWindows(includeOffscreen: Bool? = nil) -> [AXWindowInfo] {
+        let useOffscreen = includeOffscreen ?? isIncludeAllSpacesEnabled
+        return windowProvider.visibleWindows(includeOffscreen: useOffscreen)
     }
 
     private func focusedWindowInfo(for pid: pid_t, appName: String?) -> AXWindowInfo? {
