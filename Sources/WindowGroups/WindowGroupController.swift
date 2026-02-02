@@ -23,9 +23,7 @@ final class WindowGroupController {
     private var lastDiagnosticsLog = Date.distantPast
     private var manualModeEnabled = false
     private var manualGroupID: UUID?
-    private var manualMemberWindowIDs = Set<Int>()
-    private var manualMemberIdentifiers = Set<UInt>()
-    private var manualMemberElementPointers = Set<UInt>()
+    private var manualMemberKeys = Set<ManualMemberKey>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -136,9 +134,7 @@ final class WindowGroupController {
         withEventQueue {
             manualModeEnabled = enabled
             manualGroupID = nil
-            manualMemberWindowIDs.removeAll()
-            manualMemberIdentifiers.removeAll()
-            manualMemberElementPointers.removeAll()
+            manualMemberKeys.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -192,14 +188,10 @@ final class WindowGroupController {
         withEventQueue {
             guard manualModeEnabled else { return }
             let groupID = manualGroupID
-            let memberWindowIDs = manualMemberWindowIDs
-            let memberIdentifiers = manualMemberIdentifiers
-            let memberElementPointers = manualMemberElementPointers
+            let memberKeys = manualMemberKeys
             manualModeEnabled = false
             manualGroupID = nil
-            manualMemberWindowIDs.removeAll()
-            manualMemberIdentifiers.removeAll()
-            manualMemberElementPointers.removeAll()
+            manualMemberKeys.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -207,7 +199,7 @@ final class WindowGroupController {
                 return
             }
 
-            let addedCount = memberWindowIDs.count + memberIdentifiers.count + memberElementPointers.count
+            let addedCount = memberKeys.count
             guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
@@ -217,16 +209,7 @@ final class WindowGroupController {
             var groupWindows: [AXWindowInfo] = []
             groupWindows.reserveCapacity(addedCount)
             for window in windows {
-                if let windowID = window.windowID, memberWindowIDs.contains(windowID) {
-                    groupWindows.append(window)
-                    continue
-                }
-                if memberIdentifiers.contains(window.identifier) {
-                    groupWindows.append(window)
-                    continue
-                }
-                let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
-                if memberElementPointers.contains(pointer) {
+                if memberKeys.contains(makeManualKey(for: window)) {
                     groupWindows.append(window)
                 }
             }
@@ -633,13 +616,19 @@ final class WindowGroupController {
     }
 
     private func recordManualMember(_ window: AXWindowInfo) {
+        manualMemberKeys.insert(makeManualKey(for: window))
+    }
+
+    private func makeManualKey(for window: AXWindowInfo) -> ManualMemberKey {
         if let windowID = window.windowID {
-            manualMemberWindowIDs.insert(windowID)
-        } else {
-            manualMemberIdentifiers.insert(window.identifier)
+            return .windowID(pid: window.pid, windowID: windowID)
         }
-        let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
-        manualMemberElementPointers.insert(pointer)
+        return .identifier(pid: window.pid, identifier: window.identifier)
+    }
+
+    private enum ManualMemberKey: Hashable {
+        case windowID(pid: pid_t, windowID: Int)
+        case identifier(pid: pid_t, identifier: UInt)
     }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
