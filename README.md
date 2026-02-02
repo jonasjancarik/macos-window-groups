@@ -22,7 +22,7 @@ The optional "Keep Cmd-Tab Order" toggle uses private CGS APIs and may not work 
 The optional "Include other spaces" toggle includes windows from other Spaces (experimental).
 When a group change is detected, the menu bar title briefly shows the group count.
 The optional "Debug Overlay" toggle shows a live log panel on screen.
-Manual grouping mode lets you build groups explicitly. Toggle with ⌃⌥G, add focused window with Enter, finish with ⌃⌥⇧G.
+Manual grouping mode lets you build groups explicitly. Press ⌃⌥G to start and add the focused window, press ⌃⌥G again to add more, finish with ⌃⌥⇧G.
 
 ## Notes
 

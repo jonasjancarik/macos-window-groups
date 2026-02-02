@@ -164,7 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.manualModeItem = manualModeItem
 
         let manualAddItem = NSMenuItem(
-            title: "Add Focused to Manual Group (Enter)",
+            title: "Add Focused to Manual Group",
             action: #selector(addFocusedToManualGroup(_:)),
             keyEquivalent: ""
         )
@@ -451,15 +451,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if flags.contains([.control, .option]), keyCode == 5 {
             if flags.contains(.shift) {
                 controller.finishManualGroup()
+            } else if controller.isManualModeEnabled {
+                controller.addFocusedToManualGroup()
             } else {
-                controller.toggleManualMode()
+                controller.setManualModeEnabled(true)
+                controller.addFocusedToManualGroup()
             }
             syncManualModeToggle()
             return
-        }
-
-        if controller.isManualModeEnabled, (keyCode == 36 || keyCode == 76) {
-            controller.addFocusedToManualGroup()
         }
     }
 }
