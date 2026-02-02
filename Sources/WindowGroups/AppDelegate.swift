@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var includeSpacesItem: NSMenuItem?
     private var debugOverlayItem: NSMenuItem?
     private var debugOverlayController: DebugOverlayController?
+    private var manualModeItem: NSMenuItem?
+    private var manualAddItem: NSMenuItem?
+    private var manualFinishItem: NSMenuItem?
+    private var keyMonitor: Any?
     private var indicatorResetWork: DispatchWorkItem?
     private let statusTitle = "WG"
 
@@ -27,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem?.button?.title = statusTitle
         statusItem?.menu = buildMenu()
+        startKeyMonitor()
     }
 
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
@@ -57,6 +62,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         debugOverlayController = overlay
         overlay.toggle()
         sender.state = overlay.isVisible ? .on : .off
+    }
+
+    @objc private func toggleManualMode(_ sender: NSMenuItem) {
+        controller.toggleManualMode()
+        syncManualModeToggle()
+    }
+
+    @objc private func addFocusedToManualGroup(_ sender: NSMenuItem) {
+        controller.addFocusedToManualGroup()
+    }
+
+    @objc private func finishManualGroup(_ sender: NSMenuItem) {
+        controller.finishManualGroup()
+        syncManualModeToggle()
     }
 
     @objc private func edgeToleranceChanged(_ sender: NSSlider) {
@@ -133,6 +152,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         includeSpacesItem.target = self
         menu.addItem(includeSpacesItem)
         self.includeSpacesItem = includeSpacesItem
+
+        let manualModeItem = NSMenuItem(
+            title: "Manual Grouping Mode (⌃⌥G)",
+            action: #selector(toggleManualMode(_:)),
+            keyEquivalent: ""
+        )
+        manualModeItem.state = controller.isManualModeEnabled ? .on : .off
+        manualModeItem.target = self
+        menu.addItem(manualModeItem)
+        self.manualModeItem = manualModeItem
+
+        let manualAddItem = NSMenuItem(
+            title: "Add Focused to Manual Group (Enter)",
+            action: #selector(addFocusedToManualGroup(_:)),
+            keyEquivalent: ""
+        )
+        manualAddItem.target = self
+        manualAddItem.isEnabled = controller.isManualModeEnabled
+        menu.addItem(manualAddItem)
+        self.manualAddItem = manualAddItem
+
+        let manualFinishItem = NSMenuItem(
+            title: "Finish Manual Group (⌃⌥⇧G)",
+            action: #selector(finishManualGroup(_:)),
+            keyEquivalent: ""
+        )
+        manualFinishItem.target = self
+        manualFinishItem.isEnabled = controller.isManualModeEnabled
+        menu.addItem(manualFinishItem)
+        self.manualFinishItem = manualFinishItem
 
         let edgeItem = buildSliderItem(
             title: "Edge tolerance",
@@ -212,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         syncNonActivatingToggle()
         syncIncludeSpacesToggle()
         syncDebugOverlayToggle()
+        syncManualModeToggle()
         refreshGroupsMenu()
         refreshLogsMenu()
     }
@@ -244,6 +294,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func syncDebugOverlayToggle() {
         debugOverlayItem?.state = debugOverlayController?.isVisible == true ? .on : .off
+    }
+
+    private func syncManualModeToggle() {
+        let enabled = controller.isManualModeEnabled
+        manualModeItem?.state = enabled ? .on : .off
+        manualAddItem?.isEnabled = enabled
+        manualFinishItem?.isEnabled = enabled
     }
 
     private func refreshGroupsMenu() {
@@ -377,5 +434,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         indicatorResetWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6, execute: work)
+    }
+
+    private func startKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handleKey(event)
+        }
+    }
+
+    private func handleKey(_ event: NSEvent) {
+        guard !event.isARepeat else { return }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let keyCode = event.keyCode
+
+        if flags.contains([.control, .option]), keyCode == 5 {
+            if flags.contains(.shift) {
+                controller.finishManualGroup()
+            } else {
+                controller.toggleManualMode()
+            }
+            syncManualModeToggle()
+            return
+        }
+
+        if controller.isManualModeEnabled, (keyCode == 36 || keyCode == 76) {
+            controller.addFocusedToManualGroup()
+        }
     }
 }

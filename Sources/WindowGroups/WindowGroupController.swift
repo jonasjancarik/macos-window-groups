@@ -20,6 +20,8 @@ final class WindowGroupController {
     private var autoTimer: DispatchSourceTimer?
     private var lastAutoLog = Date.distantPast
     private var lastDiagnosticsLog = Date.distantPast
+    private var manualModeEnabled = false
+    private var manualGroupID: UUID?
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -71,6 +73,10 @@ final class WindowGroupController {
         UserDefaults.standard.object(forKey: includeAllSpacesKey) as? Bool ?? false
     }
 
+    var isManualModeEnabled: Bool {
+        manualModeEnabled
+    }
+
     func start() {
         let trusted = requestAccessibility(prompt: true)
         logger.log("Start. Accessibility trusted: \(trusted).")
@@ -119,6 +125,79 @@ final class WindowGroupController {
     func setIncludeAllSpacesEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: includeAllSpacesKey)
         logger.log("Include other spaces set to \(enabled).")
+    }
+
+    func setManualModeEnabled(_ enabled: Bool) {
+        manualModeEnabled = enabled
+        if !enabled {
+            manualGroupID = nil
+        }
+        logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
+    }
+
+    func toggleManualMode() {
+        setManualModeEnabled(!manualModeEnabled)
+    }
+
+    func addFocusedToManualGroup() {
+        guard manualModeEnabled else {
+            logger.log("Manual add skipped: manual mode off.")
+            return
+        }
+        guard isAccessibilityTrusted else {
+            logger.log("Manual add skipped: accessibility not trusted.")
+            return
+        }
+        guard let focusedWindow = focusedWindowInfo() else {
+            logger.log("Manual add skipped: focused window missing.")
+            return
+        }
+        let windows = visibleWindows()
+        layoutGroups.update(windows: windows)
+        let existingID = layoutGroups.groupID(for: focusedWindow.identifier)
+
+        if let manualGroupID {
+            layoutGroups.addWindow(focusedWindow.identifier, toGroup: manualGroupID)
+            let note: String
+            if existingID == manualGroupID {
+                note = "already in group"
+            } else if existingID == nil {
+                note = "added"
+            } else {
+                note = "moved from other group"
+            }
+            logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(manualGroupID)). \(note).")
+            return
+        }
+
+        let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.identifier)
+        manualGroupID = groupID
+        let note = existingID != nil ? "using existing group" : "new group"
+        logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(groupID)). \(note).")
+    }
+
+    func finishManualGroup() {
+        guard manualModeEnabled else { return }
+        let groupID = manualGroupID
+        setManualModeEnabled(false)
+
+        guard let groupID else {
+            logger.log("Manual finish. No group created.")
+            return
+        }
+
+        let windows = visibleWindows()
+        layoutGroups.update(windows: windows)
+        let groupWindows = layoutGroups.windows(inGroup: groupID, from: windows)
+        if groupWindows.count > 1 {
+            logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
+            if let focused = focusedWindowInfo(),
+               groupWindows.contains(where: { $0.identifier == focused.identifier }) {
+                bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
+            }
+        } else {
+            logger.log("Manual finish. Not enough windows in group \(shortGroupID(groupID)).")
+        }
     }
 
     func currentGroups() -> [[AXWindowInfo]] {
@@ -332,47 +411,49 @@ final class WindowGroupController {
         let windows = visibleWindows()
         layoutGroups.update(windows: windows)
         var pairingDecision: LayoutGroupState.PairDecision?
-        let focusedSide = detector.snapSide(for: focusedWindow)
-        let focusedSideLabel = snapSideLabel(focusedSide)
-        let focusedScreenIndex = detector.screenIndex(for: focusedWindow.frame)
-        let snappedOnScreen = focusedScreenIndex.map { index in
-            windows.filter {
-                detector.screenIndex(for: $0.frame) == index && detector.snapSide(for: $0) != .none
-            }
-        } ?? []
+        if !manualModeEnabled {
+            let focusedSide = detector.snapSide(for: focusedWindow)
+            let focusedSideLabel = snapSideLabel(focusedSide)
+            let focusedScreenIndex = detector.screenIndex(for: focusedWindow.frame)
+            let snappedOnScreen = focusedScreenIndex.map { index in
+                windows.filter {
+                    detector.screenIndex(for: $0.frame) == index && detector.snapSide(for: $0) != .none
+                }
+            } ?? []
 
-        if focusedSide == .none {
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: none -> skip: focused not snapped. (snapped on screen: \(snappedOnScreen.count))")
-        } else if snappedOnScreen.count == 2,
-                  let other = snappedOnScreen.first(where: { $0.identifier != focusedWindow.identifier }) {
-            let decision = layoutGroups.registerPairIfEligible(
-                focused: focusedWindow,
-                previous: other,
-                detector: detector
-            )
-            pairingDecision = decision
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
-        } else if snappedOnScreen.count > 2 {
-            if let previousID = previousFocusedWindowIdentifier,
-               previousID != focusedWindow.identifier,
-               let previousWindow = windows.first(where: { $0.identifier == previousID }) {
-                let previousSide = detector.snapSide(for: previousWindow)
-                if previousSide == .none {
-                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> skip: previous not snapped. (snapped on screen: \(snappedOnScreen.count))")
+            if focusedSide == .none {
+                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: none -> skip: focused not snapped. (snapped on screen: \(snappedOnScreen.count))")
+            } else if snappedOnScreen.count == 2,
+                      let other = snappedOnScreen.first(where: { $0.identifier != focusedWindow.identifier }) {
+                let decision = layoutGroups.registerPairIfEligible(
+                    focused: focusedWindow,
+                    previous: other,
+                    detector: detector
+                )
+                pairingDecision = decision
+                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
+            } else if snappedOnScreen.count > 2 {
+                if let previousID = previousFocusedWindowIdentifier,
+                   previousID != focusedWindow.identifier,
+                   let previousWindow = windows.first(where: { $0.identifier == previousID }) {
+                    let previousSide = detector.snapSide(for: previousWindow)
+                    if previousSide == .none {
+                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> skip: previous not snapped. (snapped on screen: \(snappedOnScreen.count))")
+                    } else {
+                        let decision = layoutGroups.registerPairIfEligible(
+                            focused: focusedWindow,
+                            previous: previousWindow,
+                            detector: detector
+                        )
+                        pairingDecision = decision
+                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (ambiguous, snapped on screen: \(snappedOnScreen.count))")
+                    }
                 } else {
-                    let decision = layoutGroups.registerPairIfEligible(
-                        focused: focusedWindow,
-                        previous: previousWindow,
-                        detector: detector
-                    )
-                    pairingDecision = decision
-                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (ambiguous, snapped on screen: \(snappedOnScreen.count))")
+                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: ambiguous. (snapped on screen: \(snappedOnScreen.count))")
                 }
             } else {
-                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: ambiguous. (snapped on screen: \(snappedOnScreen.count))")
+                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: not enough snapped. (snapped on screen: \(snappedOnScreen.count))")
             }
-        } else {
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: not enough snapped. (snapped on screen: \(snappedOnScreen.count))")
         }
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else { return }
@@ -498,6 +579,10 @@ final class WindowGroupController {
         case .none:
             return "none"
         }
+    }
+
+    private func shortGroupID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(8))
     }
 
     private func uniqueNames(from group: [AXWindowInfo]) -> [String] {

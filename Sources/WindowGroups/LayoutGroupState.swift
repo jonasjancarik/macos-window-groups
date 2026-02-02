@@ -82,6 +82,44 @@ final class LayoutGroupState {
         return grouped.values.filter { $0.count > 1 }
     }
 
+    func groupID(for windowID: UInt) -> UUID? {
+        states[windowID]?.groupID
+    }
+
+    func ensureGroup(for windowID: UInt) -> UUID {
+        if var state = states[windowID] {
+            if let gid = state.groupID {
+                return gid
+            }
+            let gid = UUID()
+            state.groupID = gid
+            states[windowID] = state
+            return gid
+        }
+        let gid = UUID()
+        states[windowID] = State(frame: .zero, lastMoved: .distantPast, groupID: gid)
+        return gid
+    }
+
+    func addWindow(_ windowID: UInt, toGroup groupID: UUID) {
+        let previous: UUID?
+        if var state = states[windowID] {
+            previous = state.groupID
+            state.groupID = groupID
+            states[windowID] = state
+        } else {
+            previous = nil
+            states[windowID] = State(frame: .zero, lastMoved: .distantPast, groupID: groupID)
+        }
+        if let previous, previous != groupID {
+            clearGroupIfSingleton(previous)
+        }
+    }
+
+    func windows(inGroup groupID: UUID, from windows: [AXWindowInfo]) -> [AXWindowInfo] {
+        windows.filter { states[$0.identifier]?.groupID == groupID }
+    }
+
     func registerPairIfEligible(
         focused: AXWindowInfo,
         previous: AXWindowInfo,
@@ -132,6 +170,17 @@ final class LayoutGroupState {
             var updated = state
             updated.groupID = nil
             states[id] = updated
+        }
+    }
+
+    private func clearGroupIfSingleton(_ groupID: UUID) {
+        let ids = states.filter { $0.value.groupID == groupID }.map { $0.key }
+        guard ids.count <= 1 else { return }
+        for id in ids {
+            if var state = states[id] {
+                state.groupID = nil
+                states[id] = state
+            }
         }
     }
 
