@@ -25,6 +25,7 @@ final class WindowGroupController {
     private var manualGroupID: UUID?
     private var manualMemberWindowIDs = Set<Int>()
     private var manualMemberIdentifiers = Set<UInt>()
+    private var manualMemberElementPointers = Set<UInt>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -137,6 +138,7 @@ final class WindowGroupController {
             manualGroupID = nil
             manualMemberWindowIDs.removeAll()
             manualMemberIdentifiers.removeAll()
+            manualMemberElementPointers.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -192,10 +194,12 @@ final class WindowGroupController {
             let groupID = manualGroupID
             let memberWindowIDs = manualMemberWindowIDs
             let memberIdentifiers = manualMemberIdentifiers
+            let memberElementPointers = manualMemberElementPointers
             manualModeEnabled = false
             manualGroupID = nil
             manualMemberWindowIDs.removeAll()
             manualMemberIdentifiers.removeAll()
+            manualMemberElementPointers.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -203,7 +207,7 @@ final class WindowGroupController {
                 return
             }
 
-            let addedCount = memberWindowIDs.count + memberIdentifiers.count
+            let addedCount = memberWindowIDs.count + memberIdentifiers.count + memberElementPointers.count
             guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
@@ -219,6 +223,11 @@ final class WindowGroupController {
                 }
                 if memberIdentifiers.contains(window.identifier) {
                     groupWindows.append(window)
+                    continue
+                }
+                let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
+                if memberElementPointers.contains(pointer) {
+                    groupWindows.append(window)
                 }
             }
 
@@ -232,7 +241,7 @@ final class WindowGroupController {
                     bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
                 }
             } else {
-                logger.log("Manual finish. Not enough visible windows in group \(shortGroupID(groupID)). Added: \(addedCount). Visible: \(groupWindows.count).")
+                logger.log("Manual finish. Group \(shortGroupID(groupID)) created with \(addedCount) members. Visible match: \(groupWindows.count).")
             }
         }
     }
@@ -629,6 +638,8 @@ final class WindowGroupController {
         } else {
             manualMemberIdentifiers.insert(window.identifier)
         }
+        let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
+        manualMemberElementPointers.insert(pointer)
     }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
