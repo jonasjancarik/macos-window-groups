@@ -23,7 +23,8 @@ final class WindowGroupController {
     private var lastDiagnosticsLog = Date.distantPast
     private var manualModeEnabled = false
     private var manualGroupID: UUID?
-    private var manualMemberIDs = Set<UInt>()
+    private var manualMemberWindowIDs = Set<Int>()
+    private var manualMemberIdentifiers = Set<UInt>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -134,7 +135,8 @@ final class WindowGroupController {
         withEventQueue {
             manualModeEnabled = enabled
             manualGroupID = nil
-            manualMemberIDs.removeAll()
+            manualMemberWindowIDs.removeAll()
+            manualMemberIdentifiers.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -163,7 +165,7 @@ final class WindowGroupController {
 
             if let manualGroupID {
                 layoutGroups.addWindow(focusedWindow.identifier, toGroup: manualGroupID)
-                manualMemberIDs.insert(focusedWindow.identifier)
+                recordManualMember(focusedWindow)
                 let note: String
                 if existingID == manualGroupID {
                     note = "already in group"
@@ -178,7 +180,7 @@ final class WindowGroupController {
 
             let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.identifier)
             manualGroupID = groupID
-            manualMemberIDs.insert(focusedWindow.identifier)
+            recordManualMember(focusedWindow)
             let note = existingID != nil ? "using existing group" : "new group"
             logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(groupID)). \(note).")
         }
@@ -188,10 +190,12 @@ final class WindowGroupController {
         withEventQueue {
             guard manualModeEnabled else { return }
             let groupID = manualGroupID
-            let memberIDs = manualMemberIDs
+            let memberWindowIDs = manualMemberWindowIDs
+            let memberIdentifiers = manualMemberIdentifiers
             manualModeEnabled = false
             manualGroupID = nil
-            manualMemberIDs.removeAll()
+            manualMemberWindowIDs.removeAll()
+            manualMemberIdentifiers.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -199,16 +203,28 @@ final class WindowGroupController {
                 return
             }
 
-            guard memberIDs.count > 1 else {
+            let addedCount = memberWindowIDs.count + memberIdentifiers.count
+            guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
             }
 
             let windows = visibleWindows(includeOffscreen: true)
-            for id in memberIDs {
-                layoutGroups.addWindow(id, toGroup: groupID)
+            var groupWindows: [AXWindowInfo] = []
+            groupWindows.reserveCapacity(addedCount)
+            for window in windows {
+                if let windowID = window.windowID, memberWindowIDs.contains(windowID) {
+                    groupWindows.append(window)
+                    continue
+                }
+                if memberIdentifiers.contains(window.identifier) {
+                    groupWindows.append(window)
+                }
             }
-            let groupWindows = windows.filter { memberIDs.contains($0.identifier) }
+
+            for window in groupWindows {
+                layoutGroups.addWindow(window.identifier, toGroup: groupID)
+            }
             if groupWindows.count > 1 {
                 logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
                 if let focused = focusedWindowInfo(),
@@ -216,7 +232,7 @@ final class WindowGroupController {
                     bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
                 }
             } else {
-                logger.log("Manual finish. Not enough visible windows in group \(shortGroupID(groupID)). Added: \(memberIDs.count). Visible: \(groupWindows.count).")
+                logger.log("Manual finish. Not enough visible windows in group \(shortGroupID(groupID)). Added: \(addedCount). Visible: \(groupWindows.count).")
             }
         }
     }
@@ -605,6 +621,14 @@ final class WindowGroupController {
 
     private func shortGroupID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
+    }
+
+    private func recordManualMember(_ window: AXWindowInfo) {
+        if let windowID = window.windowID {
+            manualMemberWindowIDs.insert(windowID)
+        } else {
+            manualMemberIdentifiers.insert(window.identifier)
+        }
     }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
