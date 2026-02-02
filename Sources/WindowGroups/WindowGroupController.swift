@@ -230,6 +230,8 @@ final class WindowGroupController {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         AXObserverAddNotification(observer, appElement, kAXFocusedWindowChangedNotification as CFString, refcon)
         AXObserverAddNotification(observer, appElement, kAXMainWindowChangedNotification as CFString, refcon)
+        AXObserverAddNotification(observer, appElement, kAXWindowMovedNotification as CFString, refcon)
+        AXObserverAddNotification(observer, appElement, kAXWindowResizedNotification as CFString, refcon)
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         self.observer = observer
@@ -340,7 +342,7 @@ final class WindowGroupController {
         } ?? []
 
         if focusedSide == .none {
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: none -> skip: focused not snapped.")
+            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: none -> skip: focused not snapped. (snapped on screen: \(snappedOnScreen.count))")
         } else if snappedOnScreen.count == 2,
                   let other = snappedOnScreen.first(where: { $0.identifier != focusedWindow.identifier }) {
             let decision = layoutGroups.registerPairIfEligible(
@@ -350,18 +352,27 @@ final class WindowGroupController {
             )
             pairingDecision = decision
             logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
-        } else if let previousID = previousFocusedWindowIdentifier,
-                  previousID != focusedWindow.identifier,
-                  let previousWindow = windows.first(where: { $0.identifier == previousID }) {
-            let decision = layoutGroups.registerPairIfEligible(
-                focused: focusedWindow,
-                previous: previousWindow,
-                detector: detector
-            )
-            pairingDecision = decision
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (snapped on screen: \(snappedOnScreen.count))")
+        } else if snappedOnScreen.count > 2 {
+            if let previousID = previousFocusedWindowIdentifier,
+               previousID != focusedWindow.identifier,
+               let previousWindow = windows.first(where: { $0.identifier == previousID }) {
+                let previousSide = detector.snapSide(for: previousWindow)
+                if previousSide == .none {
+                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> skip: previous not snapped. (snapped on screen: \(snappedOnScreen.count))")
+                } else {
+                    let decision = layoutGroups.registerPairIfEligible(
+                        focused: focusedWindow,
+                        previous: previousWindow,
+                        detector: detector
+                    )
+                    pairingDecision = decision
+                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (ambiguous, snapped on screen: \(snappedOnScreen.count))")
+                }
+            } else {
+                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: ambiguous. (snapped on screen: \(snappedOnScreen.count))")
+            }
         } else {
-            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: no previous focus. (snapped on screen: \(snappedOnScreen.count))")
+            logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: not enough snapped. (snapped on screen: \(snappedOnScreen.count))")
         }
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else { return }
