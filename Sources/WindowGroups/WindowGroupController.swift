@@ -23,7 +23,8 @@ final class WindowGroupController {
     private var lastDiagnosticsLog = Date.distantPast
     private var manualModeEnabled = false
     private var manualGroupID: UUID?
-    private var manualMemberKeys = Set<ManualMemberKey>()
+    private var manualMemberWindowIDs = Set<ManualMemberWindowKey>()
+    private var manualMemberIdentifiers = Set<ManualMemberIdentifierKey>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -134,7 +135,8 @@ final class WindowGroupController {
         withEventQueue {
             manualModeEnabled = enabled
             manualGroupID = nil
-            manualMemberKeys.removeAll()
+            manualMemberWindowIDs.removeAll()
+            manualMemberIdentifiers.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -188,10 +190,12 @@ final class WindowGroupController {
         withEventQueue {
             guard manualModeEnabled else { return }
             let groupID = manualGroupID
-            let memberKeys = manualMemberKeys
+            let memberWindowIDs = manualMemberWindowIDs
+            let memberIdentifiers = manualMemberIdentifiers
             manualModeEnabled = false
             manualGroupID = nil
-            manualMemberKeys.removeAll()
+            manualMemberWindowIDs.removeAll()
+            manualMemberIdentifiers.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -199,7 +203,7 @@ final class WindowGroupController {
                 return
             }
 
-            let addedCount = memberKeys.count
+            let addedCount = memberWindowIDs.count + memberIdentifiers.count
             guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
@@ -209,7 +213,12 @@ final class WindowGroupController {
             var groupWindows: [AXWindowInfo] = []
             groupWindows.reserveCapacity(addedCount)
             for window in windows {
-                if memberKeys.contains(makeManualKey(for: window)) {
+                if let windowID = window.windowID,
+                   memberWindowIDs.contains(ManualMemberWindowKey(pid: window.pid, windowID: windowID)) {
+                    groupWindows.append(window)
+                    continue
+                }
+                if memberIdentifiers.contains(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier)) {
                     groupWindows.append(window)
                 }
             }
@@ -616,19 +625,20 @@ final class WindowGroupController {
     }
 
     private func recordManualMember(_ window: AXWindowInfo) {
-        manualMemberKeys.insert(makeManualKey(for: window))
-    }
-
-    private func makeManualKey(for window: AXWindowInfo) -> ManualMemberKey {
         if let windowID = window.windowID {
-            return .windowID(pid: window.pid, windowID: windowID)
+            manualMemberWindowIDs.insert(ManualMemberWindowKey(pid: window.pid, windowID: windowID))
         }
-        return .identifier(pid: window.pid, identifier: window.identifier)
+        manualMemberIdentifiers.insert(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier))
     }
 
-    private enum ManualMemberKey: Hashable {
-        case windowID(pid: pid_t, windowID: Int)
-        case identifier(pid: pid_t, identifier: UInt)
+    private struct ManualMemberWindowKey: Hashable {
+        let pid: pid_t
+        let windowID: Int
+    }
+
+    private struct ManualMemberIdentifierKey: Hashable {
+        let pid: pid_t
+        let identifier: UInt
     }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
