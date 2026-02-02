@@ -3,6 +3,7 @@ import ApplicationServices
 
 final class WindowGroupController {
     private let eventQueue = DispatchQueue(label: "WindowGroups.eventQueue")
+    private let eventQueueKey = DispatchSpecificKey<Void>()
     private let windowProvider = WindowListProvider()
     private let logger = AppLogger.shared
     private let layoutGroups = LayoutGroupState()
@@ -40,6 +41,7 @@ final class WindowGroupController {
     var onGroupChange: (([AXWindowInfo]) -> Void)?
 
     init() {
+        eventQueue.setSpecific(key: eventQueueKey, value: ())
         let edgeValue = UserDefaults.standard.object(forKey: edgeToleranceKey) as? Double
             ?? Double(defaultEdgeTolerance)
         let overlapValue = UserDefaults.standard.object(forKey: overlapRatioKey) as? Double
@@ -75,7 +77,7 @@ final class WindowGroupController {
     }
 
     var isManualModeEnabled: Bool {
-        manualModeEnabled
+        withEventQueue { manualModeEnabled }
     }
 
     func start() {
@@ -129,89 +131,93 @@ final class WindowGroupController {
     }
 
     func setManualModeEnabled(_ enabled: Bool) {
-        manualModeEnabled = enabled
-        if !enabled {
+        withEventQueue {
+            manualModeEnabled = enabled
             manualGroupID = nil
             manualMemberIDs.removeAll()
-        } else {
-            manualGroupID = nil
-            manualMemberIDs.removeAll()
+            logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
-        logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
     }
 
     func toggleManualMode() {
-        setManualModeEnabled(!manualModeEnabled)
+        setManualModeEnabled(!isManualModeEnabled)
     }
 
     func addFocusedToManualGroup() {
-        guard manualModeEnabled else {
-            logger.log("Manual add skipped: manual mode off.")
-            return
-        }
-        guard isAccessibilityTrusted else {
-            logger.log("Manual add skipped: accessibility not trusted.")
-            return
-        }
-        guard let focusedWindow = focusedWindowInfo() else {
-            logger.log("Manual add skipped: focused window missing.")
-            return
-        }
-        let windows = visibleWindows(includeOffscreen: true)
-        layoutGroups.update(windows: windows)
-        let existingID = layoutGroups.groupID(for: focusedWindow.identifier)
-
-        if let manualGroupID {
-            layoutGroups.addWindow(focusedWindow.identifier, toGroup: manualGroupID)
-            manualMemberIDs.insert(focusedWindow.identifier)
-            let note: String
-            if existingID == manualGroupID {
-                note = "already in group"
-            } else if existingID == nil {
-                note = "added"
-            } else {
-                note = "moved from other group"
+        withEventQueue {
+            guard manualModeEnabled else {
+                logger.log("Manual add skipped: manual mode off.")
+                return
             }
-            logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(manualGroupID)). \(note).")
-            return
-        }
+            guard isAccessibilityTrusted else {
+                logger.log("Manual add skipped: accessibility not trusted.")
+                return
+            }
+            guard let focusedWindow = focusedWindowInfo() else {
+                logger.log("Manual add skipped: focused window missing.")
+                return
+            }
+            let windows = visibleWindows(includeOffscreen: true)
+            layoutGroups.update(windows: windows)
+            let existingID = layoutGroups.groupID(for: focusedWindow.identifier)
 
-        let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.identifier)
-        manualGroupID = groupID
-        manualMemberIDs.insert(focusedWindow.identifier)
-        let note = existingID != nil ? "using existing group" : "new group"
-        logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(groupID)). \(note).")
+            if let manualGroupID {
+                layoutGroups.addWindow(focusedWindow.identifier, toGroup: manualGroupID)
+                manualMemberIDs.insert(focusedWindow.identifier)
+                let note: String
+                if existingID == manualGroupID {
+                    note = "already in group"
+                } else if existingID == nil {
+                    note = "added"
+                } else {
+                    note = "moved from other group"
+                }
+                logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(manualGroupID)). \(note).")
+                return
+            }
+
+            let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.identifier)
+            manualGroupID = groupID
+            manualMemberIDs.insert(focusedWindow.identifier)
+            let note = existingID != nil ? "using existing group" : "new group"
+            logger.log("Manual add. \(windowLabel(focusedWindow)) -> group \(shortGroupID(groupID)). \(note).")
+        }
     }
 
     func finishManualGroup() {
-        guard manualModeEnabled else { return }
-        let groupID = manualGroupID
-        let memberIDs = manualMemberIDs
-        setManualModeEnabled(false)
+        withEventQueue {
+            guard manualModeEnabled else { return }
+            let groupID = manualGroupID
+            let memberIDs = manualMemberIDs
+            manualModeEnabled = false
+            manualGroupID = nil
+            manualMemberIDs.removeAll()
+            logger.log("Manual mode disabled.")
 
-        guard let groupID else {
-            logger.log("Manual finish. No group created.")
-            return
-        }
-
-        guard memberIDs.count > 1 else {
-            logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
-            return
-        }
-
-        let windows = visibleWindows(includeOffscreen: true)
-        for id in memberIDs {
-            layoutGroups.addWindow(id, toGroup: groupID)
-        }
-        let groupWindows = windows.filter { memberIDs.contains($0.identifier) }
-        if groupWindows.count > 1 {
-            logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
-            if let focused = focusedWindowInfo(),
-               groupWindows.contains(where: { $0.identifier == focused.identifier }) {
-                bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
+            guard let groupID else {
+                logger.log("Manual finish. No group created.")
+                return
             }
-        } else {
-            logger.log("Manual finish. Not enough visible windows in group \(shortGroupID(groupID)). Added: \(memberIDs.count). Visible: \(groupWindows.count).")
+
+            guard memberIDs.count > 1 else {
+                logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
+                return
+            }
+
+            let windows = visibleWindows(includeOffscreen: true)
+            for id in memberIDs {
+                layoutGroups.addWindow(id, toGroup: groupID)
+            }
+            let groupWindows = windows.filter { memberIDs.contains($0.identifier) }
+            if groupWindows.count > 1 {
+                logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
+                if let focused = focusedWindowInfo(),
+                   groupWindows.contains(where: { $0.identifier == focused.identifier }) {
+                    bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
+                }
+            } else {
+                logger.log("Manual finish. Not enough visible windows in group \(shortGroupID(groupID)). Added: \(memberIDs.count). Visible: \(groupWindows.count).")
+            }
         }
     }
 
@@ -599,6 +605,13 @@ final class WindowGroupController {
 
     private func shortGroupID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
+    }
+
+    private func withEventQueue<T>(_ work: () -> T) -> T {
+        if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
+            return work()
+        }
+        return eventQueue.sync(execute: work)
     }
 
     private func uniqueNames(from group: [AXWindowInfo]) -> [String] {
