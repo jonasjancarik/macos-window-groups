@@ -116,6 +116,23 @@ final class LayoutGroupState {
         }
     }
 
+    func assignWindow(_ window: AXWindowInfo, toGroup groupID: UUID, now: Date = Date()) {
+        let previous: UUID?
+        if var state = states[window.identifier] {
+            previous = state.groupID
+            state.frame = window.frame
+            state.lastMoved = now
+            state.groupID = groupID
+            states[window.identifier] = state
+        } else {
+            previous = nil
+            states[window.identifier] = State(frame: window.frame, lastMoved: now, groupID: groupID)
+        }
+        if let previous, previous != groupID {
+            clearGroupIfSingleton(previous)
+        }
+    }
+
     func windows(inGroup groupID: UUID, from windows: [AXWindowInfo]) -> [AXWindowInfo] {
         windows.filter { states[$0.identifier]?.groupID == groupID }
     }

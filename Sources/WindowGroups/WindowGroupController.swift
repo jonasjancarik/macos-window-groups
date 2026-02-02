@@ -26,7 +26,7 @@ final class WindowGroupController {
     private var manualGroupID: UUID?
     private var manualMemberWindowIDs = Set<ManualMemberWindowKey>()
     private var manualMemberIdentifiers = Set<ManualMemberIdentifierKey>()
-    private var manualMemberSnapshots: [ManualMemberSnapshot] = []
+    private var manualMemberPointers = Set<UInt>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -139,7 +139,7 @@ final class WindowGroupController {
             manualGroupID = nil
             manualMemberWindowIDs.removeAll()
             manualMemberIdentifiers.removeAll()
-            manualMemberSnapshots.removeAll()
+            manualMemberPointers.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -195,12 +195,12 @@ final class WindowGroupController {
             let groupID = manualGroupID
             let memberWindowIDs = manualMemberWindowIDs
             let memberIdentifiers = manualMemberIdentifiers
-            let memberSnapshots = manualMemberSnapshots
+            let memberPointers = manualMemberPointers
             manualModeEnabled = false
             manualGroupID = nil
             manualMemberWindowIDs.removeAll()
             manualMemberIdentifiers.removeAll()
-            manualMemberSnapshots.removeAll()
+            manualMemberPointers.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -208,7 +208,7 @@ final class WindowGroupController {
                 return
             }
 
-            let addedCount = memberWindowIDs.count + memberIdentifiers.count + memberSnapshots.count
+            let addedCount = memberWindowIDs.count + memberIdentifiers.count + memberPointers.count
             guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
@@ -217,23 +217,31 @@ final class WindowGroupController {
             let windows = visibleWindows(includeOffscreen: true)
             var groupWindows: [AXWindowInfo] = []
             groupWindows.reserveCapacity(addedCount)
+            var matchedIdentifiers = Set<UInt>()
             for window in windows {
                 if let windowID = window.windowID,
                    memberWindowIDs.contains(ManualMemberWindowKey(pid: window.pid, windowID: windowID)) {
-                    groupWindows.append(window)
+                    if matchedIdentifiers.insert(window.identifier).inserted {
+                        groupWindows.append(window)
+                    }
                     continue
                 }
                 if memberIdentifiers.contains(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier)) {
-                    groupWindows.append(window)
+                    if matchedIdentifiers.insert(window.identifier).inserted {
+                        groupWindows.append(window)
+                    }
                     continue
                 }
-                if memberSnapshots.contains(where: { $0.matches(window, tolerance: detector.edgeTolerance) }) {
-                    groupWindows.append(window)
+                let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
+                if memberPointers.contains(pointer) {
+                    if matchedIdentifiers.insert(window.identifier).inserted {
+                        groupWindows.append(window)
+                    }
                 }
             }
 
             for window in groupWindows {
-                layoutGroups.addWindow(window.identifier, toGroup: groupID)
+                layoutGroups.assignWindow(window, toGroup: groupID)
             }
             if groupWindows.count > 1 {
                 logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
@@ -650,10 +658,8 @@ final class WindowGroupController {
             manualMemberWindowIDs.insert(ManualMemberWindowKey(pid: window.pid, windowID: windowID))
         }
         manualMemberIdentifiers.insert(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier))
-        let snapshot = ManualMemberSnapshot(pid: window.pid, frame: window.frame, appName: window.appName)
-        if !manualMemberSnapshots.contains(where: { $0.isSimilar(to: snapshot, tolerance: detector.edgeTolerance) }) {
-            manualMemberSnapshots.append(snapshot)
-        }
+        let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
+        manualMemberPointers.insert(pointer)
     }
 
     private struct ManualMemberWindowKey: Hashable {
@@ -666,24 +672,6 @@ final class WindowGroupController {
         let identifier: UInt
     }
 
-    private struct ManualMemberSnapshot {
-        let pid: pid_t
-        let frame: CGRect
-        let appName: String
-
-        func matches(_ window: AXWindowInfo, tolerance: CGFloat) -> Bool {
-            guard window.pid == pid else { return false }
-            return isSimilar(to: ManualMemberSnapshot(pid: window.pid, frame: window.frame, appName: window.appName), tolerance: tolerance)
-        }
-
-        func isSimilar(to other: ManualMemberSnapshot, tolerance: CGFloat) -> Bool {
-            guard pid == other.pid else { return false }
-            return abs(frame.origin.x - other.frame.origin.x) <= tolerance
-                && abs(frame.origin.y - other.frame.origin.y) <= tolerance
-                && abs(frame.size.width - other.frame.size.width) <= tolerance
-                && abs(frame.size.height - other.frame.size.height) <= tolerance
-        }
-    }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
         if DispatchQueue.getSpecific(key: eventQueueKey) != nil {
