@@ -472,6 +472,7 @@ final class WindowGroupController {
                 pairingDecision = decision
                 logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
             } else if snappedOnScreen.count > 2 {
+                var formed = false
                 if let previousKey = previousFocusedWindowKey,
                    previousKey != focusedWindow.key,
                    let previousWindow = windows.first(where: { $0.key == previousKey }) {
@@ -486,9 +487,27 @@ final class WindowGroupController {
                         )
                         pairingDecision = decision
                         logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (ambiguous, snapped on screen: \(snappedOnScreen.count))")
+                        formed = decision.formed
                     }
-                } else {
-                    logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: ambiguous. (snapped on screen: \(snappedOnScreen.count))")
+                }
+
+                if !formed {
+                    let fallback = spatialFallbackPairCandidate(
+                        for: focusedWindow,
+                        focusedSide: focusedSide,
+                        candidates: snappedOnScreen
+                    )
+                    if let candidate = fallback.window {
+                        let decision = layoutGroups.registerPairIfEligible(
+                            focused: focusedWindow,
+                            previous: candidate,
+                            detector: detector
+                        )
+                        pairingDecision = decision
+                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(candidate)) -> \(decision.reason). (spatial fallback: \(fallback.reason), snapped on screen: \(snappedOnScreen.count))")
+                    } else {
+                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> \(fallback.reason). (snapped on screen: \(snappedOnScreen.count))")
+                    }
                 }
             } else {
                 logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: not enough snapped. (snapped on screen: \(snappedOnScreen.count))")
@@ -653,6 +672,84 @@ final class WindowGroupController {
         case .none:
             return "none"
         }
+    }
+
+    private func spatialFallbackPairCandidate(
+        for focused: AXWindowInfo,
+        focusedSide: TilingDetector.SnapSide,
+        candidates: [AXWindowInfo]
+    ) -> (window: AXWindowInfo?, reason: String) {
+        let oppositeSide: TilingDetector.SnapSide
+        switch focusedSide {
+        case .left:
+            oppositeSide = .right
+        case .right:
+            oppositeSide = .left
+        case .none:
+            return (nil, "skip: focused not snapped")
+        }
+
+        struct RankedCandidate {
+            let window: AXWindowInfo
+            let overlapRatio: CGFloat
+            let centerDistance: CGFloat
+            let edgeDistance: CGFloat
+        }
+
+        var ranked: [RankedCandidate] = []
+        for candidate in candidates where candidate.key != focused.key {
+            guard detector.snapSide(for: candidate) == oppositeSide else { continue }
+            guard detector.isAdjacent(focused.frame, candidate.frame) else { continue }
+
+            let overlap = max(0, min(focused.frame.maxY, candidate.frame.maxY) - max(focused.frame.minY, candidate.frame.minY))
+            let minHeight = max(1, min(focused.frame.height, candidate.frame.height))
+            let overlapRatio = overlap / minHeight
+            let centerDistance = abs(focused.frame.midY - candidate.frame.midY)
+            let edgeDistance = min(
+                abs(focused.frame.maxX - candidate.frame.minX),
+                abs(candidate.frame.maxX - focused.frame.minX)
+            )
+            ranked.append(
+                RankedCandidate(
+                    window: candidate,
+                    overlapRatio: overlapRatio,
+                    centerDistance: centerDistance,
+                    edgeDistance: edgeDistance
+                )
+            )
+        }
+
+        guard !ranked.isEmpty else {
+            return (nil, "skip: no opposite-side adjacent candidate")
+        }
+
+        ranked.sort { lhs, rhs in
+            if abs(lhs.overlapRatio - rhs.overlapRatio) > 0.01 {
+                return lhs.overlapRatio > rhs.overlapRatio
+            }
+            if abs(lhs.centerDistance - rhs.centerDistance) > 1 {
+                return lhs.centerDistance < rhs.centerDistance
+            }
+            return lhs.edgeDistance < rhs.edgeDistance
+        }
+
+        if ranked.count > 1 {
+            let first = ranked[0]
+            let second = ranked[1]
+            let overlapClose = abs(first.overlapRatio - second.overlapRatio) < 0.05
+            let centerClose = abs(first.centerDistance - second.centerDistance) < 30
+            if overlapClose && centerClose {
+                return (nil, "skip: spatial fallback ambiguous")
+            }
+        }
+
+        let top = ranked[0]
+        let reason = String(
+            format: "picked overlap %.2f center %.0f",
+            top.overlapRatio,
+            top.centerDistance
+        )
+        return (top.window, reason)
     }
 
     private func shortGroupID(_ id: UUID) -> String {

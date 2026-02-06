@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - Window identity handling now prioritizes stable window IDs and improved matching when apps omit AX window numbers.
 - Group bring-to-front path now attempts non-activating CGS ordering, then falls back to AX raise.
 - Group visibility/debug info is surfaced directly in the menu.
+- Auto pairing in ambiguous snapped layouts now uses spatial fallback when previous-focus pairing is unavailable.
 
 ## [0.1.0] - 2026-01-18
 ### Added

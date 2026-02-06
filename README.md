@@ -45,6 +45,6 @@ Use the menu to adjust grouping sensitivity, inspect detected groups, and inspec
 
 - Uses Accessibility APIs to read/raise windows.
 - Current auto-grouping target is left/right half-screen arrangements.
-- In ambiguous layouts (3+ snapped windows on one screen), focus history is used as tie-breaker.
+- In ambiguous layouts (3+ snapped windows on one screen), previous focus is used first, then spatial fallback (opposite side + overlap ranking).
 - Some apps do not expose stable window metadata; matching falls back to best available identifiers.
 - Manual mode disables auto-pairing while mode is enabled.
