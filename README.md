@@ -14,19 +14,37 @@ swift run
 ```
 
 The app shows a "WG" menu bar icon. Grant Accessibility permission when prompted.
-Use the menu to adjust edge tolerance/min overlap, view detected groups, and see logs.
-Logs are written to `/tmp/WindowGroups.log` (trimmed automatically) and can be opened from the Logs submenu.
-The Logs submenu also includes dump actions to inspect window frames.
-Auto diagnostics now run in the background; just reproduce and share the log file.
-The optional "Keep Cmd-Tab Order" toggle uses private CGS APIs and may not work on all macOS versions.
-The optional "Include other spaces" toggle includes windows from other Spaces (experimental).
-When a group change is detected, the menu bar title briefly shows the group count.
-The optional "Debug Overlay" toggle shows a live log panel on screen.
-Manual grouping mode lets you build groups explicitly. Press ⌃⌥G to start and add the focused window, press ⌃⌥G again to add more, finish with ⌃⌥⇧G.
+Use the menu to adjust grouping sensitivity, inspect detected groups, and inspect logs.
+
+## Features
+
+- Auto grouping for snapped left/right pairs (half-screen layouts), based on adjacency + focus transitions.
+- Manual grouping mode:
+  - `Control + Option + G`: enable mode and add focused window (or add another focused window if already enabled).
+  - `Control + Option + Shift + G`: finish manual group.
+- Optional debug overlay panel (live tail of recent logs).
+- Group list in menu ("Groups") and quick diagnostics in menu ("Logs").
+- Auto diagnostics in background, including current frontmost app and current groups.
+
+## Menu options
+
+- `Enable Snap Groups`: global on/off.
+- `Keep Cmd-Tab Order (experimental)`: tries non-activating raise through private CGS APIs first; falls back to AX raise when unavailable/failing.
+- `Include other spaces (experimental)`: include windows from other Spaces in discovery/grouping.
+- `Edge tolerance` / `Min overlap ratio`: tune adjacency detection.
+- `Manual Grouping Mode`, `Add Focused to Manual Group`, `Finish Manual Group`.
+
+## Logging and diagnostics
+
+- Logs are written to `/tmp/WindowGroups.log` (trimmed automatically).
+- Open/copy/clear logs from the `Logs` submenu.
+- `Dump Focused Context`, `Dump Visible Windows`, and `Dump Window Diagnostics` help troubleshoot matching/visibility problems.
+- Expect occasional messages like `Non-activating raise failed; falling back to AXRaise.` This indicates CGS path failed and AX path was used.
 
 ## Notes
 
 - Uses Accessibility APIs to read/raise windows.
-- Pairs snapped left/right windows based on focus changes and edge adjacency (halves only).
-- Some apps do not expose window numbers; we fall back to AX element identifiers.
-- If a group is not detected, nudge/re-tile the windows so their moves happen close together.
+- Current auto-grouping target is left/right half-screen arrangements.
+- In ambiguous layouts (3+ snapped windows on one screen), focus history is used as tie-breaker.
+- Some apps do not expose stable window metadata; matching falls back to best available identifiers.
+- Manual mode disables auto-pairing while mode is enabled.

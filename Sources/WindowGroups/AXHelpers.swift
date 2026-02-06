@@ -50,7 +50,8 @@ enum AXHelpers {
         return subrole == (kAXStandardWindowSubrole as String)
     }
 
-    static func raise(_ element: AXUIElement) {
-        AXUIElementPerformAction(element, kAXRaiseAction as CFString)
+    @discardableResult
+    static func raise(_ element: AXUIElement) -> AXError {
+        return AXUIElementPerformAction(element, kAXRaiseAction as CFString)
     }
 }

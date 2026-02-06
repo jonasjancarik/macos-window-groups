@@ -13,7 +13,7 @@ final class LayoutGroupState {
         var groupID: UUID?
     }
 
-    private var states: [UInt: State] = [:]
+    private var states: [WindowKey: State] = [:]
     private let moveThreshold: CGFloat
 
     init(
@@ -23,10 +23,10 @@ final class LayoutGroupState {
     }
 
     func update(windows: [AXWindowInfo], now: Date = Date()) {
-        var seen = Set<UInt>()
+        var seen = Set<WindowKey>()
         var groupsToClear = Set<UUID>()
         for window in windows {
-            let id = window.identifier
+            let id = window.key
             seen.insert(id)
             if var state = states[id] {
                 if frameChanged(from: state.frame, to: window.frame) {
@@ -65,10 +65,10 @@ final class LayoutGroupState {
         if !updated {
             update(windows: windows, now: now)
         }
-        guard let gid = states[focused.identifier]?.groupID else {
+        guard let gid = states[focused.key]?.groupID else {
             return [focused]
         }
-        let group = windows.filter { states[$0.identifier]?.groupID == gid }
+        let group = windows.filter { states[$0.key]?.groupID == gid }
         return group.count > 1 ? group : [focused]
     }
 
@@ -76,40 +76,40 @@ final class LayoutGroupState {
         update(windows: windows, now: now)
         var grouped: [UUID: [AXWindowInfo]] = [:]
         for window in windows {
-            guard let gid = states[window.identifier]?.groupID else { continue }
+            guard let gid = states[window.key]?.groupID else { continue }
             grouped[gid, default: []].append(window)
         }
         return grouped.values.filter { $0.count > 1 }
     }
 
-    func groupID(for windowID: UInt) -> UUID? {
-        states[windowID]?.groupID
+    func groupID(for key: WindowKey) -> UUID? {
+        states[key]?.groupID
     }
 
-    func ensureGroup(for windowID: UInt) -> UUID {
-        if var state = states[windowID] {
+    func ensureGroup(for key: WindowKey) -> UUID {
+        if var state = states[key] {
             if let gid = state.groupID {
                 return gid
             }
             let gid = UUID()
             state.groupID = gid
-            states[windowID] = state
+            states[key] = state
             return gid
         }
         let gid = UUID()
-        states[windowID] = State(frame: .zero, lastMoved: .distantPast, groupID: gid)
+        states[key] = State(frame: .zero, lastMoved: .distantPast, groupID: gid)
         return gid
     }
 
-    func addWindow(_ windowID: UInt, toGroup groupID: UUID) {
+    func addWindow(_ key: WindowKey, toGroup groupID: UUID) {
         let previous: UUID?
-        if var state = states[windowID] {
+        if var state = states[key] {
             previous = state.groupID
             state.groupID = groupID
-            states[windowID] = state
+            states[key] = state
         } else {
             previous = nil
-            states[windowID] = State(frame: .zero, lastMoved: .distantPast, groupID: groupID)
+            states[key] = State(frame: .zero, lastMoved: .distantPast, groupID: groupID)
         }
         if let previous, previous != groupID {
             clearGroupIfSingleton(previous)
@@ -118,15 +118,15 @@ final class LayoutGroupState {
 
     func assignWindow(_ window: AXWindowInfo, toGroup groupID: UUID, now: Date = Date()) {
         let previous: UUID?
-        if var state = states[window.identifier] {
+        if var state = states[window.key] {
             previous = state.groupID
             state.frame = window.frame
             state.lastMoved = now
             state.groupID = groupID
-            states[window.identifier] = state
+            states[window.key] = state
         } else {
             previous = nil
-            states[window.identifier] = State(frame: window.frame, lastMoved: now, groupID: groupID)
+            states[window.key] = State(frame: window.frame, lastMoved: now, groupID: groupID)
         }
         if let previous, previous != groupID {
             clearGroupIfSingleton(previous)
@@ -134,7 +134,7 @@ final class LayoutGroupState {
     }
 
     func windows(inGroup groupID: UUID, from windows: [AXWindowInfo]) -> [AXWindowInfo] {
-        windows.filter { states[$0.identifier]?.groupID == groupID }
+        windows.filter { states[$0.key]?.groupID == groupID }
     }
 
     func registerPairIfEligible(
@@ -145,7 +145,7 @@ final class LayoutGroupState {
         let focusedSide = detector.snapSide(for: focused)
         let previousSide = detector.snapSide(for: previous)
 
-        guard focused.identifier != previous.identifier else {
+        guard focused.key != previous.key else {
             return PairDecision(formed: false, reason: "skip: same window")
         }
 
@@ -161,14 +161,14 @@ final class LayoutGroupState {
             return PairDecision(formed: false, reason: "skip: not opposite sides (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
         }
 
-        assignGroup(ids: [focused.identifier, previous.identifier])
+        assignGroup(keys: [focused.key, previous.key])
         return PairDecision(formed: true, reason: "paired: prev focus + \(sideLabel(focusedSide))/\(sideLabel(previousSide))")
     }
 
-    private func assignGroup(ids: [UInt]) {
+    private func assignGroup(keys: [WindowKey]) {
         var groupsToClear = Set<UUID>()
-        for id in ids {
-            if let gid = states[id]?.groupID {
+        for key in keys {
+            if let gid = states[key]?.groupID {
                 groupsToClear.insert(gid)
             }
         }
@@ -177,8 +177,8 @@ final class LayoutGroupState {
         }
 
         let gid = UUID()
-        for id in ids {
-            states[id]?.groupID = gid
+        for key in keys {
+            states[key]?.groupID = gid
         }
     }
 

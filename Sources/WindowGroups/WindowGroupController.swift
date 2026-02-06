@@ -14,8 +14,8 @@ final class WindowGroupController {
     private var observer: AXObserver?
     private var observedPID: pid_t?
     private var lastGroupKey: String?
-    private var lastTriggeredFocusedWindowIdentifier: UInt?
-    private var previousFocusedWindowIdentifier: UInt?
+    private var lastTriggeredFocusedWindowKey: WindowKey?
+    private var previousFocusedWindowKey: WindowKey?
     private var lastActivePID: pid_t?
     private var lastActiveAppName: String?
     private var autoTimer: DispatchSourceTimer?
@@ -24,9 +24,7 @@ final class WindowGroupController {
     private var lastGroupLog = Date.distantPast
     private var manualModeEnabled = false
     private var manualGroupID: UUID?
-    private var manualMemberWindowIDs = Set<ManualMemberWindowKey>()
-    private var manualMemberIdentifiers = Set<ManualMemberIdentifierKey>()
-    private var manualMemberPointers = Set<UInt>()
+    private var manualMemberKeys = Set<WindowKey>()
 
     private let enabledKey = "WindowGroups.enabled"
     private let edgeToleranceKey = "WindowGroups.edgeTolerance"
@@ -137,9 +135,7 @@ final class WindowGroupController {
         withEventQueue {
             manualModeEnabled = enabled
             manualGroupID = nil
-            manualMemberWindowIDs.removeAll()
-            manualMemberIdentifiers.removeAll()
-            manualMemberPointers.removeAll()
+            manualMemberKeys.removeAll()
             logger.log("Manual mode \(enabled ? "enabled" : "disabled").")
         }
     }
@@ -164,10 +160,10 @@ final class WindowGroupController {
             }
             let windows = visibleWindows(includeOffscreen: true)
             layoutGroups.update(windows: windows)
-            let existingID = layoutGroups.groupID(for: focusedWindow.identifier)
+            let existingID = layoutGroups.groupID(for: focusedWindow.key)
 
             if let manualGroupID {
-                layoutGroups.addWindow(focusedWindow.identifier, toGroup: manualGroupID)
+                layoutGroups.addWindow(focusedWindow.key, toGroup: manualGroupID)
                 recordManualMember(focusedWindow)
                 let note: String
                 if existingID == manualGroupID {
@@ -181,7 +177,7 @@ final class WindowGroupController {
                 return
             }
 
-            let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.identifier)
+            let groupID = existingID ?? layoutGroups.ensureGroup(for: focusedWindow.key)
             manualGroupID = groupID
             recordManualMember(focusedWindow)
             let note = existingID != nil ? "using existing group" : "new group"
@@ -193,14 +189,10 @@ final class WindowGroupController {
         withEventQueue {
             guard manualModeEnabled else { return }
             let groupID = manualGroupID
-            let memberWindowIDs = manualMemberWindowIDs
-            let memberIdentifiers = manualMemberIdentifiers
-            let memberPointers = manualMemberPointers
+            let memberKeys = manualMemberKeys
             manualModeEnabled = false
             manualGroupID = nil
-            manualMemberWindowIDs.removeAll()
-            manualMemberIdentifiers.removeAll()
-            manualMemberPointers.removeAll()
+            manualMemberKeys.removeAll()
             logger.log("Manual mode disabled.")
 
             guard let groupID else {
@@ -208,47 +200,27 @@ final class WindowGroupController {
                 return
             }
 
-            let addedCount = memberWindowIDs.count + memberIdentifiers.count + memberPointers.count
+            let addedCount = memberKeys.count
             guard addedCount > 1 else {
                 logger.log("Manual finish. Not enough windows added to group \(shortGroupID(groupID)).")
                 return
             }
 
             let windows = visibleWindows(includeOffscreen: true)
-            var groupWindows: [AXWindowInfo] = []
-            groupWindows.reserveCapacity(addedCount)
-            var matchedIdentifiers = Set<UInt>()
-            for window in windows {
-                if let windowID = window.windowID,
-                   memberWindowIDs.contains(ManualMemberWindowKey(pid: window.pid, windowID: windowID)) {
-                    if matchedIdentifiers.insert(window.identifier).inserted {
-                        groupWindows.append(window)
-                    }
-                    continue
-                }
-                if memberIdentifiers.contains(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier)) {
-                    if matchedIdentifiers.insert(window.identifier).inserted {
-                        groupWindows.append(window)
-                    }
-                    continue
-                }
-                let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
-                if memberPointers.contains(pointer) {
-                    if matchedIdentifiers.insert(window.identifier).inserted {
-                        groupWindows.append(window)
-                    }
-                }
-            }
+            let groupWindows = windows.filter { memberKeys.contains($0.key) }
 
             for window in groupWindows {
                 layoutGroups.assignWindow(window, toGroup: groupID)
             }
             if groupWindows.count > 1 {
                 logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
-                if let focused = focusedWindowInfo(),
-                   groupWindows.contains(where: { $0.identifier == focused.identifier }) {
-                    bringGroupToFront(groupWindows, focusedWindowIdentifier: focused.identifier)
-                }
+        if let focused = focusedWindowInfo(),
+           groupWindows.contains(where: { $0.key == focused.key }) {
+            bringGroupToFront(groupWindows, focusedWindowKey: focused.key)
+        }
+            } else if groupWindows.isEmpty {
+                let keyList = memberKeys.map { $0.description }.sorted().joined(separator: ", ")
+                logger.log("Manual finish. Group \(shortGroupID(groupID)) created with \(addedCount) members. Visible match: 0. Keys: \(keyList).")
             } else {
                 logger.log("Manual finish. Group \(shortGroupID(groupID)) created with \(addedCount) members. Visible match: \(groupWindows.count).")
             }
@@ -474,7 +446,7 @@ final class WindowGroupController {
         guard Date() >= suppressionUntil else { return }
 
         guard let focusedWindow = focusedWindowInfo() else { return }
-        defer { previousFocusedWindowIdentifier = focusedWindow.identifier }
+        defer { previousFocusedWindowKey = focusedWindow.key }
         let windows = visibleWindows(includeOffscreen: manualModeEnabled)
         layoutGroups.update(windows: windows)
         var pairingDecision: LayoutGroupState.PairDecision?
@@ -500,9 +472,9 @@ final class WindowGroupController {
                 pairingDecision = decision
                 logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
             } else if snappedOnScreen.count > 2 {
-                if let previousID = previousFocusedWindowIdentifier,
-                   previousID != focusedWindow.identifier,
-                   let previousWindow = windows.first(where: { $0.identifier == previousID }) {
+                if let previousKey = previousFocusedWindowKey,
+                   previousKey != focusedWindow.key,
+                   let previousWindow = windows.first(where: { $0.key == previousKey }) {
                     let previousSide = detector.snapSide(for: previousWindow)
                     if previousSide == .none {
                         logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> skip: previous not snapped. (snapped on screen: \(snappedOnScreen.count))")
@@ -525,8 +497,8 @@ final class WindowGroupController {
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else { return }
 
-        let groupKey = group.map { String($0.identifier) }.sorted().joined(separator: ",")
-        if groupKey == lastGroupKey, focusedWindow.identifier == lastTriggeredFocusedWindowIdentifier {
+        let groupKey = group.map { $0.key.description }.sorted().joined(separator: ",")
+        if groupKey == lastGroupKey, focusedWindow.key == lastTriggeredFocusedWindowKey {
             return
         }
 
@@ -537,9 +509,9 @@ final class WindowGroupController {
             self?.onGroupChange?(group)
         }
         suppressionUntil = Date().addingTimeInterval(0.3)
-        bringGroupToFront(group, focusedWindowIdentifier: focusedWindow.identifier)
+        bringGroupToFront(group, focusedWindowKey: focusedWindow.key)
         lastGroupKey = groupKey
-        lastTriggeredFocusedWindowIdentifier = focusedWindow.identifier
+        lastTriggeredFocusedWindowKey = focusedWindow.key
     }
 
     private func focusedWindowInfo() -> AXWindowInfo? {
@@ -560,9 +532,24 @@ final class WindowGroupController {
             AXHelpers.copyAttribute(appElement, kAXMainWindowAttribute as CFString)
         guard let windowElement else { return nil }
         guard let frame = AXHelpers.copyFrame(windowElement) else { return nil }
-        let windowID = AXHelpers.copyWindowNumber(windowElement)
+        var windowID = AXHelpers.copyWindowNumber(windowElement)
         let identifier = AXHelpers.elementIdentifier(windowElement)
         let name = appName ?? "App"
+
+        if windowID == nil {
+            let temp = AXWindowInfo(
+                identifier: identifier,
+                windowID: nil,
+                pid: pid,
+                appName: name,
+                frame: frame,
+                axElement: windowElement
+            )
+            let entries = windowProvider.cgWindowEntries()
+            if let matched = windowProvider.matchCGWindowID(for: temp, in: entries) {
+                windowID = Int(matched)
+            }
+        }
 
         return AXWindowInfo(
             identifier: identifier,
@@ -574,19 +561,38 @@ final class WindowGroupController {
         )
     }
 
-    private func bringGroupToFront(_ group: [AXWindowInfo], focusedWindowIdentifier: UInt) {
-        guard let focused = group.first(where: { $0.identifier == focusedWindowIdentifier }) else { return }
-
-        if isNonActivatingRaiseEnabled, raiseGroupWithoutActivation(group, focused: focused) {
+    private func bringGroupToFront(_ group: [AXWindowInfo], focusedWindowKey: WindowKey) {
+        guard let focused = group.first(where: { $0.key == focusedWindowKey }) else {
+            logger.log("Bring group skipped: focused window not in group.")
             return
         }
 
-        for window in group where window.identifier != focusedWindowIdentifier {
-            AXHelpers.raise(window.axElement)
+        let groupByPID = Dictionary(grouping: group, by: { $0.pid })
+        let shouldUseOrderer = isNonActivatingRaiseEnabled || groupByPID.count > 1
+        if shouldUseOrderer, raiseGroupWithoutActivation(group, focused: focused) {
+            return
+        }
+        if shouldUseOrderer {
+            logger.log("Non-activating raise failed; falling back to AXRaise.")
         }
 
-        AXHelpers.raise(focused.axElement)
-        if let app = NSRunningApplication(processIdentifier: focused.pid) {
+        func raiseWindows(_ windows: [AXWindowInfo]) {
+            for window in windows {
+                let result = AXHelpers.raise(window.axElement)
+                if result != .success {
+                    logger.log("Raise failed for \(windowLabel(window)): \(result.rawValue).")
+                }
+            }
+        }
+
+        let others = group.filter { $0.key != focusedWindowKey }
+        raiseWindows(others)
+        let focusedResult = AXHelpers.raise(focused.axElement)
+        if focusedResult != .success {
+            logger.log("Raise failed for focused \(windowLabel(focused)): \(focusedResult.rawValue).")
+        }
+        if let app = NSRunningApplication(processIdentifier: focused.pid),
+           NSWorkspace.shared.frontmostApplication?.processIdentifier != focused.pid {
             app.activate(options: [.activateIgnoringOtherApps])
         }
     }
@@ -654,22 +660,7 @@ final class WindowGroupController {
     }
 
     private func recordManualMember(_ window: AXWindowInfo) {
-        if let windowID = window.windowID {
-            manualMemberWindowIDs.insert(ManualMemberWindowKey(pid: window.pid, windowID: windowID))
-        }
-        manualMemberIdentifiers.insert(ManualMemberIdentifierKey(pid: window.pid, identifier: window.identifier))
-        let pointer = UInt(bitPattern: Unmanaged.passUnretained(window.axElement).toOpaque())
-        manualMemberPointers.insert(pointer)
-    }
-
-    private struct ManualMemberWindowKey: Hashable {
-        let pid: pid_t
-        let windowID: Int
-    }
-
-    private struct ManualMemberIdentifierKey: Hashable {
-        let pid: pid_t
-        let identifier: UInt
+        manualMemberKeys.insert(window.key)
     }
 
 

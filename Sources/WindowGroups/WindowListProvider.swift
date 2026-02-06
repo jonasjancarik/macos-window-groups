@@ -17,6 +17,7 @@ struct WindowListProvider {
 
         var windows: [AXWindowInfo] = []
         windows.reserveCapacity(32)
+        var cgEntries: [CGWindowEntry]?
 
         for app in apps {
             let appElement = AXUIElementCreateApplication(app.processIdentifier)
@@ -30,15 +31,34 @@ struct WindowListProvider {
                 guard let frame = AXHelpers.copyFrame(window) else { continue }
                 guard isFrameOnAnyScreen(frame) else { continue }
 
-                let windowID = AXHelpers.copyWindowNumber(window)
+                let name = app.localizedName ?? "App"
+                let identifier = AXHelpers.elementIdentifier(window)
+                var windowID = AXHelpers.copyWindowNumber(window)
+                if windowID == nil {
+                    if cgEntries == nil {
+                        cgEntries = cgWindowEntries()
+                    }
+                    if let entries = cgEntries {
+                        let temp = AXWindowInfo(
+                            identifier: identifier,
+                            windowID: nil,
+                            pid: app.processIdentifier,
+                            appName: name,
+                            frame: frame,
+                            axElement: window
+                        )
+                        if let matched = matchCGWindowID(for: temp, in: entries) {
+                            windowID = Int(matched)
+                        }
+                    }
+                }
                 if let windowID, !onScreenIDs.isEmpty, !onScreenIDs.contains(windowID) {
                     continue
                 }
 
-                let name = app.localizedName ?? "App"
                 windows.append(
                     AXWindowInfo(
-                        identifier: AXHelpers.elementIdentifier(window),
+                        identifier: identifier,
                         windowID: windowID,
                         pid: app.processIdentifier,
                         appName: name,
