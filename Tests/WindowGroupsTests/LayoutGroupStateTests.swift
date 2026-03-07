@@ -46,10 +46,20 @@ final class LayoutGroupStateTests: XCTestCase {
         state.addWindow(second.key, toGroup: groupID)
 
         let movedSecond = makeWindow(windowID: 2, identifier: 1002, frame: CGRect(x: 640, y: 0, width: 600, height: 800))
-        state.update(windows: [first, movedSecond])
+        let invalidations = state.update(windows: [first, movedSecond])
 
         XCTAssertEqual(state.group(for: first, in: [first, movedSecond]), [first])
         XCTAssertEqual(state.group(for: movedSecond, in: [first, movedSecond]), [movedSecond])
+        XCTAssertEqual(
+            invalidations,
+            [
+                .init(
+                    groupID: groupID,
+                    members: [first.key, second.key],
+                    reason: .frameChanged(windowKey: second.key, oldFrame: second.frame, newFrame: movedSecond.frame)
+                )
+            ]
+        )
     }
 
     func testUpdateClearsGroupWhenMemberDisappears() {
@@ -61,9 +71,19 @@ final class LayoutGroupStateTests: XCTestCase {
         let groupID = state.ensureGroup(for: first.key)
         state.addWindow(second.key, toGroup: groupID)
 
-        state.update(windows: [first])
+        let invalidations = state.update(windows: [first])
 
         XCTAssertEqual(state.group(for: first, in: [first]), [first])
+        XCTAssertEqual(
+            invalidations,
+            [
+                .init(
+                    groupID: groupID,
+                    members: [first.key, second.key],
+                    reason: .windowMissing(windowKey: second.key)
+                )
+            ]
+        )
     }
 
     private func makeWindow(

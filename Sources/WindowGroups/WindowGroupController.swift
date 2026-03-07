@@ -86,7 +86,7 @@ final class WindowGroupController {
                 return
             }
             let windows = visibleWindows(includeOffscreen: true)
-            layoutGroups.update(windows: windows)
+            logGroupInvalidations(layoutGroups.update(windows: windows))
             let existingID = layoutGroups.groupID(for: focusedWindow.key)
 
             if let manualGroupID {
@@ -158,8 +158,9 @@ final class WindowGroupController {
     func currentGroups() -> [[AXWindowInfo]] {
         guard isAccessibilityTrusted else { return [] }
         return eventQueue.sync {
-            let windows = visibleWindows(includeOffscreen: true)
-            return layoutGroups.groups(in: windows).filter { $0.count > 1 }
+            let windows = visibleWindows(includeOffscreen: manualModeEnabled)
+            logGroupInvalidations(layoutGroups.update(windows: windows))
+            return layoutGroups.groups(in: windows, updated: true).filter { $0.count > 1 }
         }
     }
 
@@ -302,7 +303,7 @@ final class WindowGroupController {
             return
         }
         let windows = visibleWindows(includeOffscreen: manualModeEnabled)
-        layoutGroups.update(windows: windows)
+        logGroupInvalidations(layoutGroups.update(windows: windows))
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
         guard group.count > 1 else {
             lastGroupKey = nil
@@ -461,6 +462,22 @@ final class WindowGroupController {
 
     private func recordManualMember(_ window: AXWindowInfo) {
         manualMemberKeys.insert(window.key)
+    }
+
+    private func logGroupInvalidations(_ invalidations: [LayoutGroupState.GroupInvalidation]) {
+        for invalidation in invalidations {
+            let memberList = invalidation.members.map(\.description).joined(separator: ", ")
+            switch invalidation.reason {
+            case .frameChanged(let windowKey, let oldFrame, let newFrame):
+                logger.log(
+                    "Stored group \(shortGroupID(invalidation.groupID)) cleared. Reason: \(windowKey.description) moved/resized from \(formatFrame(oldFrame)) to \(formatFrame(newFrame)). Members: \(memberList)."
+                )
+            case .windowMissing(let windowKey):
+                logger.log(
+                    "Stored group \(shortGroupID(invalidation.groupID)) cleared. Reason: \(windowKey.description) disappeared from the tracked window set. Members: \(memberList)."
+                )
+            }
+        }
     }
 
     private func withEventQueue<T>(_ work: () -> T) -> T {

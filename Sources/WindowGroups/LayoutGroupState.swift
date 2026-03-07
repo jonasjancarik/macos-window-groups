@@ -2,6 +2,17 @@ import Foundation
 import AppKit
 
 final class LayoutGroupState {
+    struct GroupInvalidation: Equatable {
+        enum Reason: Equatable {
+            case frameChanged(windowKey: WindowKey, oldFrame: CGRect, newFrame: CGRect)
+            case windowMissing(windowKey: WindowKey)
+        }
+
+        let groupID: UUID
+        let members: [WindowKey]
+        let reason: Reason
+    }
+
     struct State {
         var frame: CGRect
         var lastMoved: Date
@@ -17,9 +28,11 @@ final class LayoutGroupState {
         self.moveThreshold = moveThreshold
     }
 
-    func update(windows: [AXWindowInfo], now: Date = Date()) {
+    @discardableResult
+    func update(windows: [AXWindowInfo], now: Date = Date()) -> [GroupInvalidation] {
         var seen = Set<WindowKey>()
         var groupsToClear = Set<UUID>()
+        var invalidationsByGroup: [UUID: GroupInvalidation] = [:]
         for window in windows {
             let id = window.key
             seen.insert(id)
@@ -27,6 +40,11 @@ final class LayoutGroupState {
                 if frameChanged(from: state.frame, to: window.frame) {
                     if let gid = state.groupID {
                         groupsToClear.insert(gid)
+                        invalidationsByGroup[gid] = invalidationsByGroup[gid] ?? GroupInvalidation(
+                            groupID: gid,
+                            members: members(inGroup: gid),
+                            reason: .frameChanged(windowKey: id, oldFrame: state.frame, newFrame: window.frame)
+                        )
                     }
                     state.frame = window.frame
                     state.lastMoved = now
@@ -43,12 +61,18 @@ final class LayoutGroupState {
         for id in removed {
             if let gid = states[id]?.groupID {
                 groupsToClear.insert(gid)
+                invalidationsByGroup[gid] = invalidationsByGroup[gid] ?? GroupInvalidation(
+                    groupID: gid,
+                    members: members(inGroup: gid),
+                    reason: .windowMissing(windowKey: id)
+                )
             }
         }
         states = states.filter { seen.contains($0.key) }
         for gid in groupsToClear {
             clearGroup(groupID: gid)
         }
+        return invalidationsByGroup.values.sorted { $0.groupID.uuidString < $1.groupID.uuidString }
     }
 
     func group(
@@ -67,8 +91,14 @@ final class LayoutGroupState {
         return group.count > 1 ? group : [focused]
     }
 
-    func groups(in windows: [AXWindowInfo], now: Date = Date()) -> [[AXWindowInfo]] {
-        update(windows: windows, now: now)
+    func groups(
+        in windows: [AXWindowInfo],
+        updated: Bool = false,
+        now: Date = Date()
+    ) -> [[AXWindowInfo]] {
+        if !updated {
+            update(windows: windows, now: now)
+        }
         var grouped: [UUID: [AXWindowInfo]] = [:]
         for window in windows {
             guard let gid = states[window.key]?.groupID else { continue }
@@ -149,6 +179,13 @@ final class LayoutGroupState {
                 states[id] = state
             }
         }
+    }
+
+    private func members(inGroup groupID: UUID) -> [WindowKey] {
+        states
+            .filter { $0.value.groupID == groupID }
+            .map(\.key)
+            .sorted { $0.description < $1.description }
     }
 
     private func frameChanged(from old: CGRect, to new: CGRect) -> Bool {
