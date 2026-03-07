@@ -4,16 +4,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let controller = WindowGroupController()
     private let logger = AppLogger.shared
     private var statusItem: NSStatusItem?
-    private var enableItem: NSMenuItem?
     private var permissionItem: NSMenuItem?
     private var groupsItem: NSMenuItem?
     private var logsItem: NSMenuItem?
-    private var edgeToleranceSlider: NSSlider?
-    private var overlapSlider: NSSlider?
-    private var edgeValueLabel: NSTextField?
-    private var overlapValueLabel: NSTextField?
-    private var nonActivatingItem: NSMenuItem?
-    private var includeSpacesItem: NSMenuItem?
     private var debugOverlayItem: NSMenuItem?
     private var debugOverlayController: DebugOverlayController?
     private var manualModeItem: NSMenuItem?
@@ -34,27 +27,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startKeyMonitor()
     }
 
-    @objc private func toggleEnabled(_ sender: NSMenuItem) {
-        let next = sender.state == .off
-        controller.setEnabled(next)
-        sender.state = next ? .on : .off
-    }
-
     @objc private func requestAccessibility(_ sender: NSMenuItem) {
         _ = controller.requestAccessibility(prompt: true)
         refreshPermissionMenuItem()
-    }
-
-    @objc private func toggleNonActivatingRaise(_ sender: NSMenuItem) {
-        let next = sender.state == .off
-        controller.setNonActivatingRaiseEnabled(next)
-        sender.state = next ? .on : .off
-    }
-
-    @objc private func toggleIncludeSpaces(_ sender: NSMenuItem) {
-        let next = sender.state == .off
-        controller.setIncludeAllSpacesEnabled(next)
-        sender.state = next ? .on : .off
     }
 
     @objc private func toggleDebugOverlay(_ sender: NSMenuItem) {
@@ -76,16 +51,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func finishManualGroup(_ sender: NSMenuItem) {
         controller.finishManualGroup()
         syncManualModeToggle()
-    }
-
-    @objc private func edgeToleranceChanged(_ sender: NSSlider) {
-        controller.updateEdgeTolerance(sender.doubleValue)
-        edgeValueLabel?.stringValue = formatEdgeValue(sender.doubleValue)
-    }
-
-    @objc private func overlapChanged(_ sender: NSSlider) {
-        controller.updateMinOverlapRatio(sender.doubleValue)
-        overlapValueLabel?.stringValue = formatOverlapValue(sender.doubleValue)
     }
 
     @objc private func copyLogs(_ sender: NSMenuItem) {
@@ -123,36 +88,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let menu = NSMenu()
         menu.delegate = self
 
-        let enableItem = NSMenuItem(
-            title: "Enable Snap Groups",
-            action: #selector(toggleEnabled(_:)),
-            keyEquivalent: ""
-        )
-        enableItem.state = controller.isEnabled ? .on : .off
-        enableItem.target = self
-        menu.addItem(enableItem)
-        self.enableItem = enableItem
-
-        let nonActivatingItem = NSMenuItem(
-            title: "Keep Cmd-Tab Order (experimental)",
-            action: #selector(toggleNonActivatingRaise(_:)),
-            keyEquivalent: ""
-        )
-        nonActivatingItem.state = controller.isNonActivatingRaiseEnabled ? .on : .off
-        nonActivatingItem.target = self
-        menu.addItem(nonActivatingItem)
-        self.nonActivatingItem = nonActivatingItem
-
-        let includeSpacesItem = NSMenuItem(
-            title: "Include other spaces (experimental)",
-            action: #selector(toggleIncludeSpaces(_:)),
-            keyEquivalent: ""
-        )
-        includeSpacesItem.state = controller.isIncludeAllSpacesEnabled ? .on : .off
-        includeSpacesItem.target = self
-        menu.addItem(includeSpacesItem)
-        self.includeSpacesItem = includeSpacesItem
-
         let manualModeItem = NSMenuItem(
             title: "Manual Grouping Mode (⌃⌥G)",
             action: #selector(toggleManualMode(_:)),
@@ -182,32 +117,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         manualFinishItem.isEnabled = controller.isManualModeEnabled
         menu.addItem(manualFinishItem)
         self.manualFinishItem = manualFinishItem
-
-        let edgeItem = buildSliderItem(
-            title: "Edge tolerance",
-            min: 2,
-            max: 40,
-            value: controller.edgeToleranceValue,
-            action: #selector(edgeToleranceChanged(_:)),
-            assign: { slider, label in
-                self.edgeToleranceSlider = slider
-                self.edgeValueLabel = label
-            }
-        )
-        menu.addItem(edgeItem)
-
-        let overlapItem = buildSliderItem(
-            title: "Min overlap ratio",
-            min: 0.1,
-            max: 0.9,
-            value: controller.minOverlapRatioValue,
-            action: #selector(overlapChanged(_:)),
-            assign: { slider, label in
-                self.overlapSlider = slider
-                self.overlapValueLabel = label
-            }
-        )
-        menu.addItem(overlapItem)
 
         menu.addItem(.separator())
 
@@ -251,15 +160,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(quitItem)
 
         refreshPermissionMenuItem()
-        syncSliderValues()
         return menu
     }
 
     func menuWillOpen(_ menu: NSMenu) {
         refreshPermissionMenuItem()
-        syncSliderValues()
-        syncNonActivatingToggle()
-        syncIncludeSpacesToggle()
         syncDebugOverlayToggle()
         syncManualModeToggle()
         refreshGroupsMenu()
@@ -272,24 +177,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         permissionItem?.title = trusted
             ? "Accessibility Permission Granted"
             : "Request Accessibility Permission"
-    }
-
-    private func syncSliderValues() {
-        let edgeValue = controller.edgeToleranceValue
-        edgeToleranceSlider?.doubleValue = edgeValue
-        edgeValueLabel?.stringValue = formatEdgeValue(edgeValue)
-
-        let overlapValue = controller.minOverlapRatioValue
-        overlapSlider?.doubleValue = overlapValue
-        overlapValueLabel?.stringValue = formatOverlapValue(overlapValue)
-    }
-
-    private func syncNonActivatingToggle() {
-        nonActivatingItem?.state = controller.isNonActivatingRaiseEnabled ? .on : .off
-    }
-
-    private func syncIncludeSpacesToggle() {
-        includeSpacesItem?.state = controller.isIncludeAllSpacesEnabled ? .on : .off
     }
 
     private func syncDebugOverlayToggle() {
@@ -364,48 +251,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let clearItem = NSMenuItem(title: "Clear Logs", action: #selector(clearLogs(_:)), keyEquivalent: "")
         clearItem.target = self
         submenu.addItem(clearItem)
-    }
-
-    private func buildSliderItem(
-        title: String,
-        min: Double,
-        max: Double,
-        value: Double,
-        action: Selector,
-        assign: (NSSlider, NSTextField) -> Void
-    ) -> NSMenuItem {
-        let menuItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        let view = NSView(frame: NSRect(x: 0, y: 0, width: 260, height: 46))
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = NSFont.systemFont(ofSize: 12)
-        titleLabel.frame = NSRect(x: 10, y: 26, width: 170, height: 16)
-
-        let valueLabel = NSTextField(labelWithString: "")
-        valueLabel.font = NSFont.systemFont(ofSize: 12)
-        valueLabel.alignment = .right
-        valueLabel.frame = NSRect(x: 180, y: 26, width: 70, height: 16)
-
-        let slider = NSSlider(value: value, minValue: min, maxValue: max, target: self, action: action)
-        slider.isContinuous = true
-        slider.frame = NSRect(x: 10, y: 6, width: 240, height: 16)
-
-        view.addSubview(titleLabel)
-        view.addSubview(valueLabel)
-        view.addSubview(slider)
-        menuItem.view = view
-
-        assign(slider, valueLabel)
-
-        return menuItem
-    }
-
-    private func formatEdgeValue(_ value: Double) -> String {
-        String(format: "%.0f", value)
-    }
-
-    private func formatOverlapValue(_ value: Double) -> String {
-        String(format: "%.2f", value)
     }
 
     private func groupTitle(_ group: [AXWindowInfo]) -> String {

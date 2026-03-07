@@ -7,7 +7,6 @@ final class WindowGroupController {
     private let windowProvider = WindowListProvider()
     private let logger = AppLogger.shared
     private let layoutGroups = LayoutGroupState()
-    private var detector: TilingDetector
 
     private var suppressionUntil = Date.distantPast
     private var pendingWork: DispatchWorkItem?
@@ -15,24 +14,11 @@ final class WindowGroupController {
     private var observedPID: pid_t?
     private var lastGroupKey: String?
     private var lastTriggeredFocusedWindowKey: WindowKey?
-    private var previousFocusedWindowKey: WindowKey?
     private var lastActivePID: pid_t?
     private var lastActiveAppName: String?
-    private var autoTimer: DispatchSourceTimer?
-    private var lastAutoLog = Date.distantPast
-    private var lastDiagnosticsLog = Date.distantPast
-    private var lastGroupLog = Date.distantPast
     private var manualModeEnabled = false
     private var manualGroupID: UUID?
     private var manualMemberKeys = Set<WindowKey>()
-
-    private let enabledKey = "WindowGroups.enabled"
-    private let edgeToleranceKey = "WindowGroups.edgeTolerance"
-    private let overlapRatioKey = "WindowGroups.minOverlapRatio"
-    private let nonActivatingRaiseKey = "WindowGroups.nonActivatingRaise"
-    private let includeAllSpacesKey = "WindowGroups.includeAllSpaces"
-    private let defaultEdgeTolerance: CGFloat = 8
-    private let defaultOverlapRatio: CGFloat = 0.25
 
     private var loggedPermissionDenied = false
     private var loggedOrdererUnavailable = false
@@ -43,38 +29,10 @@ final class WindowGroupController {
 
     init() {
         eventQueue.setSpecific(key: eventQueueKey, value: ())
-        let edgeValue = UserDefaults.standard.object(forKey: edgeToleranceKey) as? Double
-            ?? Double(defaultEdgeTolerance)
-        let overlapValue = UserDefaults.standard.object(forKey: overlapRatioKey) as? Double
-            ?? Double(defaultOverlapRatio)
-        detector = TilingDetector(
-            edgeTolerance: CGFloat(edgeValue),
-            minOverlapRatio: CGFloat(overlapValue)
-        )
-    }
-
-    var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true
     }
 
     var isAccessibilityTrusted: Bool {
         AXIsProcessTrusted()
-    }
-
-    var edgeToleranceValue: Double {
-        Double(detector.edgeTolerance)
-    }
-
-    var minOverlapRatioValue: Double {
-        Double(detector.minOverlapRatio)
-    }
-
-    var isNonActivatingRaiseEnabled: Bool {
-        UserDefaults.standard.object(forKey: nonActivatingRaiseKey) as? Bool ?? false
-    }
-
-    var isIncludeAllSpacesEnabled: Bool {
-        UserDefaults.standard.object(forKey: includeAllSpacesKey) as? Bool ?? false
     }
 
     var isManualModeEnabled: Bool {
@@ -84,18 +42,9 @@ final class WindowGroupController {
     func start() {
         let trusted = requestAccessibility(prompt: true)
         logger.log("Start. Accessibility trusted: \(trusted).")
-        logger.log("Tiling config. Edge tolerance: \(edgeToleranceValue). Min overlap: \(minOverlapRatioValue).")
         logger.log("Log file: \(logger.logFileURL.path).")
-        logger.log("Non-activating raise: \(isNonActivatingRaiseEnabled).")
-        logger.log("Include other spaces: \(isIncludeAllSpacesEnabled).")
         subscribeWorkspaceNotifications()
         refreshObserverForFrontmostApp()
-        startAutoDiagnostics()
-    }
-
-    func setEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: enabledKey)
-        logger.log("Enabled set to \(enabled).")
     }
 
     @discardableResult
@@ -107,28 +56,6 @@ final class WindowGroupController {
             loggedPermissionDenied = false
         }
         return trusted
-    }
-
-    func updateEdgeTolerance(_ value: Double) {
-        detector.edgeTolerance = CGFloat(value)
-        UserDefaults.standard.set(value, forKey: edgeToleranceKey)
-        logger.log("Edge tolerance set to \(value).")
-    }
-
-    func updateMinOverlapRatio(_ value: Double) {
-        detector.minOverlapRatio = CGFloat(value)
-        UserDefaults.standard.set(value, forKey: overlapRatioKey)
-        logger.log("Min overlap ratio set to \(value).")
-    }
-
-    func setNonActivatingRaiseEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: nonActivatingRaiseKey)
-        logger.log("Non-activating raise set to \(enabled).")
-    }
-
-    func setIncludeAllSpacesEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: includeAllSpacesKey)
-        logger.log("Include other spaces set to \(enabled).")
     }
 
     func setManualModeEnabled(_ enabled: Bool) {
@@ -214,10 +141,11 @@ final class WindowGroupController {
             }
             if groupWindows.count > 1 {
                 logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
-        if let focused = focusedWindowInfo(),
-           groupWindows.contains(where: { $0.key == focused.key }) {
-            bringGroupToFront(groupWindows, focusedWindowKey: focused.key)
-        }
+                if let focused = focusedWindowInfo(),
+                   groupWindows.contains(where: { $0.key == focused.key }) {
+                    suppressionUntil = Date().addingTimeInterval(0.3)
+                    bringGroupToFront(groupWindows, focusedWindowKey: focused.key)
+                }
             } else if groupWindows.isEmpty {
                 let keyList = memberKeys.map { $0.description }.sorted().joined(separator: ", ")
                 logger.log("Manual finish. Group \(shortGroupID(groupID)) created with \(addedCount) members. Visible match: 0. Keys: \(keyList).")
@@ -230,7 +158,7 @@ final class WindowGroupController {
     func currentGroups() -> [[AXWindowInfo]] {
         guard isAccessibilityTrusted else { return [] }
         return eventQueue.sync {
-            let windows = visibleWindows()
+            let windows = visibleWindows(includeOffscreen: true)
             return layoutGroups.groups(in: windows).filter { $0.count > 1 }
         }
     }
@@ -269,26 +197,15 @@ final class WindowGroupController {
         }
 
         logger.log("Focused window: \(windowLabel(focusedWindow)) frame \(formatFrame(focusedWindow.frame)).")
-        let (adjacent, group, fallbackGroup) = eventQueue.sync {
-            let windows = visibleWindows()
-            let adjacent = detector.adjacentWindows(to: focusedWindow, in: windows)
-            let group = layoutGroups.group(for: focusedWindow, in: windows)
-            if group.count <= 1 {
-                let fallback = detector.group(for: focusedWindow, in: windows)
-                return (adjacent, fallback, fallback.count > 1 ? fallback : nil)
-            }
-            return (adjacent, group, nil)
-        }
-        if adjacent.isEmpty {
-            logger.log("Adjacent windows: none.")
-        } else {
-            let summary = adjacent.map { windowLabel($0) }.joined(separator: ", ")
-            logger.log("Adjacent windows: \(summary).")
+        let group = eventQueue.sync {
+            let windows = visibleWindows(includeOffscreen: true)
+            return layoutGroups.group(for: focusedWindow, in: windows)
         }
 
-        logger.log("Group size: \(group.count).")
-        if let fallbackGroup, fallbackGroup.count > 1 {
-            logger.log("Fallback group size: \(fallbackGroup.count).")
+        if group.count <= 1 {
+            logger.log("Stored group: none.")
+        } else {
+            logger.log("Stored group. \(groupSummary(group)) Windows: \(groupWindowList(group)).")
         }
     }
 
@@ -358,7 +275,6 @@ final class WindowGroupController {
     }
 
     private func scheduleGroupRefresh() {
-        guard isEnabled else { return }
         guard isAccessibilityTrusted else {
             if !loggedPermissionDenied {
                 logger.log("Accessibility permission missing. Grouping paused.")
@@ -376,153 +292,30 @@ final class WindowGroupController {
         eventQueue.asyncAfter(deadline: .now() + 0.06, execute: work)
     }
 
-    private func startAutoDiagnostics() {
-        if autoTimer != nil {
-            return
-        }
-
-        logger.log("Auto diagnostics enabled.")
-        let timer = DispatchSource.makeTimerSource(queue: eventQueue)
-        timer.schedule(deadline: .now() + 1, repeating: 2, leeway: .milliseconds(200))
-        timer.setEventHandler { [weak self] in
-            self?.autoDiagnosticsTick()
-        }
-        timer.resume()
-        autoTimer = timer
-    }
-
-    private func autoDiagnosticsTick() {
-        let now = Date()
-        guard isAccessibilityTrusted else {
-            logger.log("Auto diag. Accessibility not trusted.")
-            return
-        }
-
-        let activeApp = activeAppContext()
-        let focused = activeApp.flatMap { focusedWindowInfo(for: $0.pid, appName: $0.name) }
-        let windows = visibleWindows()
-        let groups = layoutGroups.groups(in: windows, now: now)
-
-        guard now.timeIntervalSince(lastAutoLog) >= 5 else { return }
-        lastAutoLog = now
-
-        let activeName = activeApp?.name ?? "n/a"
-        let activePid = activeApp?.pid ?? -1
-        logger.log("Auto diag. Frontmost: \(activeName) pid \(activePid). Focused: \(focused != nil). Visible windows: \(windows.count).")
-
-        if now.timeIntervalSince(lastGroupLog) >= 5 {
-            lastGroupLog = now
-            if groups.isEmpty {
-                logger.log("Auto diag. Groups: none.")
-            } else {
-                logger.log("Auto diag. Groups: \(groups.count).")
-                for (index, group) in groups.enumerated() {
-                    logger.log("Auto diag. Group \(index + 1): \(groupSummary(group)) Windows: \(groupWindowList(group)).")
-                }
-            }
-        }
-
-        if (focused == nil || windows.isEmpty),
-           now.timeIntervalSince(lastDiagnosticsLog) >= 15 {
-            lastDiagnosticsLog = now
-            logger.log("Auto diag. Deep dump triggered.")
-            windowProvider.dumpDiagnostics(logger: logger)
-        }
-    }
-
-    private func activeAppContext() -> (pid: pid_t, name: String)? {
-        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() {
-            return (app.processIdentifier, app.localizedName ?? "App")
-        }
-        if let pid = lastActivePID {
-            return (pid, lastActiveAppName ?? "App")
-        }
-        return nil
-    }
-
     private func refreshGroup() {
-        guard isEnabled else { return }
         guard isAccessibilityTrusted else { return }
         guard Date() >= suppressionUntil else { return }
 
-        guard let focusedWindow = focusedWindowInfo() else { return }
-        defer { previousFocusedWindowKey = focusedWindow.key }
+        guard let focusedWindow = focusedWindowInfo() else {
+            lastGroupKey = nil
+            lastTriggeredFocusedWindowKey = nil
+            return
+        }
         let windows = visibleWindows(includeOffscreen: manualModeEnabled)
         layoutGroups.update(windows: windows)
-        var pairingDecision: LayoutGroupState.PairDecision?
-        if !manualModeEnabled {
-            let focusedSide = detector.snapSide(for: focusedWindow)
-            let focusedSideLabel = snapSideLabel(focusedSide)
-            let focusedScreenIndex = detector.screenIndex(for: focusedWindow.frame)
-            let snappedOnScreen = focusedScreenIndex.map { index in
-                windows.filter {
-                    detector.screenIndex(for: $0.frame) == index && detector.snapSide(for: $0) != .none
-                }
-            } ?? []
-
-            if focusedSide == .none {
-                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: none -> skip: focused not snapped. (snapped on screen: \(snappedOnScreen.count))")
-            } else if snappedOnScreen.count == 2,
-                      let other = snappedOnScreen.first(where: { $0.identifier != focusedWindow.identifier }) {
-                let decision = layoutGroups.registerPairIfEligible(
-                    focused: focusedWindow,
-                    previous: other,
-                    detector: detector
-                )
-                pairingDecision = decision
-                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(other)) -> \(decision.reason). (two-snapped)")
-            } else if snappedOnScreen.count > 2 {
-                var formed = false
-                if let previousKey = previousFocusedWindowKey,
-                   previousKey != focusedWindow.key,
-                   let previousWindow = windows.first(where: { $0.key == previousKey }) {
-                    let previousSide = detector.snapSide(for: previousWindow)
-                    if previousSide == .none {
-                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> skip: previous not snapped. (snapped on screen: \(snappedOnScreen.count))")
-                    } else {
-                        let decision = layoutGroups.registerPairIfEligible(
-                            focused: focusedWindow,
-                            previous: previousWindow,
-                            detector: detector
-                        )
-                        pairingDecision = decision
-                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(previousWindow)) -> \(decision.reason). (ambiguous, snapped on screen: \(snappedOnScreen.count))")
-                        formed = decision.formed
-                    }
-                }
-
-                if !formed {
-                    let fallback = spatialFallbackPairCandidate(
-                        for: focusedWindow,
-                        focusedSide: focusedSide,
-                        candidates: snappedOnScreen
-                    )
-                    if let candidate = fallback.window {
-                        let decision = layoutGroups.registerPairIfEligible(
-                            focused: focusedWindow,
-                            previous: candidate,
-                            detector: detector
-                        )
-                        pairingDecision = decision
-                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: \(windowLabel(candidate)) -> \(decision.reason). (spatial fallback: \(fallback.reason), snapped on screen: \(snappedOnScreen.count))")
-                    } else {
-                        logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> \(fallback.reason). (snapped on screen: \(snappedOnScreen.count))")
-                    }
-                }
-            } else {
-                logger.log("Pairing check. Focused: \(windowLabel(focusedWindow)) Side: \(focusedSideLabel) Prev: none -> skip: not enough snapped. (snapped on screen: \(snappedOnScreen.count))")
-            }
-        }
         let group = layoutGroups.group(for: focusedWindow, in: windows, updated: true)
-        guard group.count > 1 else { return }
+        guard group.count > 1 else {
+            lastGroupKey = nil
+            lastTriggeredFocusedWindowKey = nil
+            return
+        }
 
         let groupKey = group.map { $0.key.description }.sorted().joined(separator: ",")
         if groupKey == lastGroupKey, focusedWindow.key == lastTriggeredFocusedWindowKey {
             return
         }
 
-        let reason = pairingDecision?.formed == true ? pairingDecision?.reason ?? "paired" : "existing pair"
-        logger.log("Group detected. \(groupSummary(group)) Focused: \(windowLabel(focusedWindow)). Reason: \(reason).")
+        logger.log("Stored group activated. \(groupSummary(group)) Focused: \(windowLabel(focusedWindow)).")
         logger.log("Group windows: \(groupWindowList(group)).")
         DispatchQueue.main.async { [weak self] in
             self?.onGroupChange?(group)
@@ -539,9 +332,8 @@ final class WindowGroupController {
         return focusedWindowInfo(for: app.processIdentifier, appName: app.localizedName)
     }
 
-    private func visibleWindows(includeOffscreen: Bool? = nil) -> [AXWindowInfo] {
-        let useOffscreen = includeOffscreen ?? isIncludeAllSpacesEnabled
-        return windowProvider.visibleWindows(includeOffscreen: useOffscreen)
+    private func visibleWindows(includeOffscreen: Bool = false) -> [AXWindowInfo] {
+        windowProvider.visibleWindows(includeOffscreen: includeOffscreen)
     }
 
     private func focusedWindowInfo(for pid: pid_t, appName: String?) -> AXWindowInfo? {
@@ -587,7 +379,7 @@ final class WindowGroupController {
         }
 
         let groupByPID = Dictionary(grouping: group, by: { $0.pid })
-        let shouldUseOrderer = isNonActivatingRaiseEnabled || groupByPID.count > 1
+        let shouldUseOrderer = groupByPID.count > 1
         if shouldUseOrderer, raiseGroupWithoutActivation(group, focused: focused) {
             return
         }
@@ -663,95 +455,6 @@ final class WindowGroupController {
         group.map { windowLabel($0) }.joined(separator: ", ")
     }
 
-    private func snapSideLabel(_ side: TilingDetector.SnapSide) -> String {
-        switch side {
-        case .left:
-            return "left"
-        case .right:
-            return "right"
-        case .none:
-            return "none"
-        }
-    }
-
-    private func spatialFallbackPairCandidate(
-        for focused: AXWindowInfo,
-        focusedSide: TilingDetector.SnapSide,
-        candidates: [AXWindowInfo]
-    ) -> (window: AXWindowInfo?, reason: String) {
-        let oppositeSide: TilingDetector.SnapSide
-        switch focusedSide {
-        case .left:
-            oppositeSide = .right
-        case .right:
-            oppositeSide = .left
-        case .none:
-            return (nil, "skip: focused not snapped")
-        }
-
-        struct RankedCandidate {
-            let window: AXWindowInfo
-            let overlapRatio: CGFloat
-            let centerDistance: CGFloat
-            let edgeDistance: CGFloat
-        }
-
-        var ranked: [RankedCandidate] = []
-        for candidate in candidates where candidate.key != focused.key {
-            guard detector.snapSide(for: candidate) == oppositeSide else { continue }
-            guard detector.isAdjacent(focused.frame, candidate.frame) else { continue }
-
-            let overlap = max(0, min(focused.frame.maxY, candidate.frame.maxY) - max(focused.frame.minY, candidate.frame.minY))
-            let minHeight = max(1, min(focused.frame.height, candidate.frame.height))
-            let overlapRatio = overlap / minHeight
-            let centerDistance = abs(focused.frame.midY - candidate.frame.midY)
-            let edgeDistance = min(
-                abs(focused.frame.maxX - candidate.frame.minX),
-                abs(candidate.frame.maxX - focused.frame.minX)
-            )
-            ranked.append(
-                RankedCandidate(
-                    window: candidate,
-                    overlapRatio: overlapRatio,
-                    centerDistance: centerDistance,
-                    edgeDistance: edgeDistance
-                )
-            )
-        }
-
-        guard !ranked.isEmpty else {
-            return (nil, "skip: no opposite-side adjacent candidate")
-        }
-
-        ranked.sort { lhs, rhs in
-            if abs(lhs.overlapRatio - rhs.overlapRatio) > 0.01 {
-                return lhs.overlapRatio > rhs.overlapRatio
-            }
-            if abs(lhs.centerDistance - rhs.centerDistance) > 1 {
-                return lhs.centerDistance < rhs.centerDistance
-            }
-            return lhs.edgeDistance < rhs.edgeDistance
-        }
-
-        if ranked.count > 1 {
-            let first = ranked[0]
-            let second = ranked[1]
-            let overlapClose = abs(first.overlapRatio - second.overlapRatio) < 0.05
-            let centerClose = abs(first.centerDistance - second.centerDistance) < 30
-            if overlapClose && centerClose {
-                return (nil, "skip: spatial fallback ambiguous")
-            }
-        }
-
-        let top = ranked[0]
-        let reason = String(
-            format: "picked overlap %.2f center %.0f",
-            top.overlapRatio,
-            top.centerDistance
-        )
-        return (top.window, reason)
-    }
-
     private func shortGroupID(_ id: UUID) -> String {
         String(id.uuidString.prefix(8))
     }
@@ -759,7 +462,6 @@ final class WindowGroupController {
     private func recordManualMember(_ window: AXWindowInfo) {
         manualMemberKeys.insert(window.key)
     }
-
 
     private func withEventQueue<T>(_ work: () -> T) -> T {
         if DispatchQueue.getSpecific(key: eventQueueKey) != nil {

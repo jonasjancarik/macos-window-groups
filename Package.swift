@@ -8,6 +8,10 @@ let package = Package(
         .executable(name: "WindowGroups", targets: ["WindowGroups"])
     ],
     targets: [
-        .executableTarget(name: "WindowGroups")
+        .executableTarget(name: "WindowGroups"),
+        .testTarget(
+            name: "WindowGroupsTests",
+            dependencies: ["WindowGroups"]
+        )
     ]
 )

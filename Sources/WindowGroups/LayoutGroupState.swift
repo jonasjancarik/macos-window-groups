@@ -2,11 +2,6 @@ import Foundation
 import AppKit
 
 final class LayoutGroupState {
-    struct PairDecision {
-        let formed: Bool
-        let reason: String
-    }
-
     struct State {
         var frame: CGRect
         var lastMoved: Date
@@ -137,51 +132,6 @@ final class LayoutGroupState {
         windows.filter { states[$0.key]?.groupID == groupID }
     }
 
-    func registerPairIfEligible(
-        focused: AXWindowInfo,
-        previous: AXWindowInfo,
-        detector: TilingDetector
-    ) -> PairDecision {
-        let focusedSide = detector.snapSide(for: focused)
-        let previousSide = detector.snapSide(for: previous)
-
-        guard focused.key != previous.key else {
-            return PairDecision(formed: false, reason: "skip: same window")
-        }
-
-        guard sameScreen(focused, previous, detector: detector) else {
-            return PairDecision(formed: false, reason: "skip: different screens (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
-        }
-
-        guard detector.isAdjacent(focused.frame, previous.frame) else {
-            return PairDecision(formed: false, reason: "skip: not adjacent (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
-        }
-
-        guard isOppositeSide(focusedSide, previousSide) else {
-            return PairDecision(formed: false, reason: "skip: not opposite sides (\(sideLabel(focusedSide))/\(sideLabel(previousSide)))")
-        }
-
-        assignGroup(keys: [focused.key, previous.key])
-        return PairDecision(formed: true, reason: "paired: prev focus + \(sideLabel(focusedSide))/\(sideLabel(previousSide))")
-    }
-
-    private func assignGroup(keys: [WindowKey]) {
-        var groupsToClear = Set<UUID>()
-        for key in keys {
-            if let gid = states[key]?.groupID {
-                groupsToClear.insert(gid)
-            }
-        }
-        for gid in groupsToClear {
-            clearGroup(groupID: gid)
-        }
-
-        let gid = UUID()
-        for key in keys {
-            states[key]?.groupID = gid
-        }
-    }
-
     private func clearGroup(groupID: UUID) {
         for (id, state) in states where state.groupID == groupID {
             var updated = state
@@ -201,34 +151,6 @@ final class LayoutGroupState {
         }
     }
 
-    private func sameScreen(_ a: AXWindowInfo, _ b: AXWindowInfo, detector: TilingDetector) -> Bool {
-        guard let aIndex = detector.screenIndex(for: a.frame),
-              let bIndex = detector.screenIndex(for: b.frame) else {
-            return false
-        }
-        return aIndex == bIndex
-    }
-
-    private func isOppositeSide(_ a: TilingDetector.SnapSide, _ b: TilingDetector.SnapSide) -> Bool {
-        switch (a, b) {
-        case (.left, .right), (.right, .left):
-            return true
-        default:
-            return false
-        }
-    }
-
-    private func sideLabel(_ side: TilingDetector.SnapSide) -> String {
-        switch side {
-        case .left:
-            return "left"
-        case .right:
-            return "right"
-        case .none:
-            return "none"
-        }
-    }
-
     private func frameChanged(from old: CGRect, to new: CGRect) -> Bool {
         let dx = abs(old.origin.x - new.origin.x)
         let dy = abs(old.origin.y - new.origin.y)
@@ -236,5 +158,4 @@ final class LayoutGroupState {
         let dh = abs(old.size.height - new.size.height)
         return dx > moveThreshold || dy > moveThreshold || dw > moveThreshold || dh > moveThreshold
     }
-
 }
