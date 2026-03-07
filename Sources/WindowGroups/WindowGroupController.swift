@@ -81,7 +81,7 @@ final class WindowGroupController {
                 logger.log("Manual add skipped: accessibility not trusted.")
                 return
             }
-            guard let focusedWindow = focusedWindowInfo() else {
+            guard let focusedWindow = menuTargetWindowInfo() else {
                 logger.log("Manual add skipped: focused window missing.")
                 return
             }
@@ -141,7 +141,7 @@ final class WindowGroupController {
             }
             if groupWindows.count > 1 {
                 logger.log("Manual finish. \(groupSummary(groupWindows)) Windows: \(groupWindowList(groupWindows)).")
-                if let focused = focusedWindowInfo(),
+                if let focused = menuTargetWindowInfo(),
                    groupWindows.contains(where: { $0.key == focused.key }) {
                     suppressionUntil = Date().addingTimeInterval(0.3)
                     bringGroupToFront(groupWindows, focusedWindowKey: focused.key)
@@ -167,7 +167,7 @@ final class WindowGroupController {
     func isFocusedWindowGrouped() -> Bool {
         guard isAccessibilityTrusted else { return false }
         return eventQueue.sync {
-            guard let focusedWindow = focusedWindowInfo() else { return false }
+            guard let focusedWindow = menuTargetWindowInfo() else { return false }
             let windows = visibleWindows(includeOffscreen: manualModeEnabled)
             logGroupInvalidations(layoutGroups.update(windows: windows))
             return layoutGroups.group(for: focusedWindow, in: windows, updated: true).count > 1
@@ -180,7 +180,7 @@ final class WindowGroupController {
                 logger.log("Remove focused from group skipped: accessibility not trusted.")
                 return
             }
-            guard let focusedWindow = focusedWindowInfo() else {
+            guard let focusedWindow = menuTargetWindowInfo() else {
                 logger.log("Remove focused from group skipped: focused window missing.")
                 return
             }
@@ -220,7 +220,7 @@ final class WindowGroupController {
                 logger.log("Delete group skipped: accessibility not trusted.")
                 return
             }
-            guard let focusedWindow = focusedWindowInfo() else {
+            guard let focusedWindow = menuTargetWindowInfo() else {
                 logger.log("Delete group skipped: focused window missing.")
                 return
             }
@@ -263,16 +263,7 @@ final class WindowGroupController {
             return
         }
 
-        let focusedWindow: AXWindowInfo?
-        if let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != getpid() {
-            focusedWindow = focusedWindowInfo(for: app.processIdentifier, appName: app.localizedName)
-        } else if let pid = lastActivePID {
-            focusedWindow = focusedWindowInfo(for: pid, appName: lastActiveAppName)
-        } else {
-            focusedWindow = nil
-        }
-
-        guard let focusedWindow else {
+        guard let focusedWindow = menuTargetWindowInfo() else {
             logger.log("Focused window not found. Last active pid: \(lastActivePID ?? -1).")
             return
         }
@@ -411,6 +402,14 @@ final class WindowGroupController {
         guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
         guard app.processIdentifier != getpid() else { return nil }
         return focusedWindowInfo(for: app.processIdentifier, appName: app.localizedName)
+    }
+
+    private func menuTargetWindowInfo() -> AXWindowInfo? {
+        if let focused = focusedWindowInfo() {
+            return focused
+        }
+        guard let pid = lastActivePID else { return nil }
+        return focusedWindowInfo(for: pid, appName: lastActiveAppName)
     }
 
     private func visibleWindows(includeOffscreen: Bool = false) -> [AXWindowInfo] {
