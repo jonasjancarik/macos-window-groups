@@ -10,6 +10,7 @@ All notable changes to this project will be documented in this file.
 - Debug overlay panel for live log tail.
 - Periodic auto-diagnostics and richer pairing/grouping logs.
 - Menu actions for focused/visible/diagnostic dumps.
+- Python E2E auto-group smoke test script (`scripts/e2e_auto_group.py`).
 
 ### Changed
 - Window identity handling now prioritizes stable window IDs and improved matching when apps omit AX window numbers.

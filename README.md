@@ -41,6 +41,18 @@ Use the menu to adjust grouping sensitivity, inspect detected groups, and inspec
 - `Dump Focused Context`, `Dump Visible Windows`, and `Dump Window Diagnostics` help troubleshoot matching/visibility problems.
 - Expect occasional messages like `Non-activating raise failed; falling back to AXRaise.` This indicates CGS path failed and AX path was used.
 
+## Automated smoke test (Python)
+
+- Script: `/Users/janca/projects/macos-window-groups/scripts/e2e_auto_group.py`
+- Purpose: end-to-end check of auto grouping + bring-to-front using real apps/windows.
+- It arranges Terminal/TextEdit windows, drives focus transitions, checks `/tmp/WindowGroups.log`, and validates on-screen z-order.
+- Run with WindowGroups already running:
+  - `python3 scripts/e2e_auto_group.py`
+- Or let script launch WindowGroups binary:
+  - `swift build`
+  - `python3 scripts/e2e_auto_group.py --launch-windowgroups`
+- Permissions needed: Accessibility and Automation for the process running the script (and WindowGroups).
+
 ## Notes
 
 - Uses Accessibility APIs to read/raise windows.
