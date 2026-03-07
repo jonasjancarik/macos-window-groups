@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 - Manual grouping mode with global hotkeys:
   - `Control + Option + G` to start/add.
   - `Control + Option + Shift + G` to finish.
+- Explicit menu actions to remove the focused window from a group or delete the current group.
 - Debug overlay panel for live log tail.
 - Menu actions for focused/visible/diagnostic dumps.
 - Swift unit tests for manual group state.

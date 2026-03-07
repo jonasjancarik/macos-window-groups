@@ -28,6 +28,7 @@ Use the menu to create manual groups, inspect stored groups, and inspect logs.
 ## Menu options
 
 - `Manual Grouping Mode`, `Add Focused to Manual Group`, `Finish Manual Group`.
+- `Remove Focused Window From Group`, `Delete Current Group`.
 - `Groups`, `Logs`, `Debug Overlay`, `Request Accessibility Permission`.
 
 ## Logging and diagnostics
@@ -41,5 +42,6 @@ Use the menu to create manual groups, inspect stored groups, and inspect logs.
 
 - Uses Accessibility APIs to read/raise windows.
 - Stored groups are cleared if a member moves/resizes significantly or disappears.
+- Stored groups can be edited explicitly from the menu by removing the focused window or deleting the current group.
 - Some apps do not expose stable window metadata; matching falls back to best available identifiers.
 - Multi-app groups try non-activating CGS ordering first, then fall back to AX raise.

@@ -12,6 +12,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var manualModeItem: NSMenuItem?
     private var manualAddItem: NSMenuItem?
     private var manualFinishItem: NSMenuItem?
+    private var removeFocusedItem: NSMenuItem?
+    private var deleteGroupItem: NSMenuItem?
     private var keyMonitor: Any?
     private var indicatorResetWork: DispatchWorkItem?
     private let statusTitle = "WG"
@@ -51,6 +53,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func finishManualGroup(_ sender: NSMenuItem) {
         controller.finishManualGroup()
         syncManualModeToggle()
+    }
+
+    @objc private func removeFocusedWindowFromGroup(_ sender: NSMenuItem) {
+        controller.removeFocusedWindowFromGroup()
+    }
+
+    @objc private func deleteFocusedWindowGroup(_ sender: NSMenuItem) {
+        controller.deleteFocusedWindowGroup()
     }
 
     @objc private func copyLogs(_ sender: NSMenuItem) {
@@ -118,6 +128,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(manualFinishItem)
         self.manualFinishItem = manualFinishItem
 
+        let removeFocusedItem = NSMenuItem(
+            title: "Remove Focused Window From Group",
+            action: #selector(removeFocusedWindowFromGroup(_:)),
+            keyEquivalent: ""
+        )
+        removeFocusedItem.target = self
+        menu.addItem(removeFocusedItem)
+        self.removeFocusedItem = removeFocusedItem
+
+        let deleteGroupItem = NSMenuItem(
+            title: "Delete Current Group",
+            action: #selector(deleteFocusedWindowGroup(_:)),
+            keyEquivalent: ""
+        )
+        deleteGroupItem.target = self
+        menu.addItem(deleteGroupItem)
+        self.deleteGroupItem = deleteGroupItem
+
         menu.addItem(.separator())
 
         let groupsItem = NSMenuItem(title: "Groups", action: nil, keyEquivalent: "")
@@ -167,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refreshPermissionMenuItem()
         syncDebugOverlayToggle()
         syncManualModeToggle()
+        syncGroupMutationActions()
         refreshGroupsMenu()
         refreshLogsMenu()
     }
@@ -188,6 +217,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         manualModeItem?.state = enabled ? .on : .off
         manualAddItem?.isEnabled = enabled
         manualFinishItem?.isEnabled = enabled
+    }
+
+    private func syncGroupMutationActions() {
+        let grouped = controller.isFocusedWindowGrouped()
+        removeFocusedItem?.isEnabled = grouped
+        deleteGroupItem?.isEnabled = grouped
     }
 
     private func refreshGroupsMenu() {

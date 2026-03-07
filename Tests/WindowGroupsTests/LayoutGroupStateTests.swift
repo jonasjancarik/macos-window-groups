@@ -86,6 +86,71 @@ final class LayoutGroupStateTests: XCTestCase {
         )
     }
 
+    func testRemoveWindowKeepsRemainingGroupWhenEnoughMembersRemain() {
+        let state = LayoutGroupState()
+        let first = makeWindow(windowID: 1, identifier: 1001, frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let second = makeWindow(windowID: 2, identifier: 1002, frame: CGRect(x: 600, y: 0, width: 600, height: 800))
+        let third = makeWindow(windowID: 3, identifier: 1003, frame: CGRect(x: 1200, y: 0, width: 600, height: 800))
+        let windows = [first, second, third]
+
+        state.update(windows: windows)
+        let groupID = state.ensureGroup(for: first.key)
+        state.addWindow(second.key, toGroup: groupID)
+        state.addWindow(third.key, toGroup: groupID)
+
+        let mutation = state.removeWindow(second.key)
+
+        XCTAssertEqual(
+            mutation,
+            .init(groupID: groupID, membersBefore: [first.key, second.key, third.key], membersAfter: [first.key, third.key])
+        )
+        XCTAssertEqual(Set(state.group(for: first, in: windows)), Set([first, third]))
+        XCTAssertEqual(state.group(for: second, in: windows), [second])
+    }
+
+    func testRemoveWindowDeletesTwoMemberGroup() {
+        let state = LayoutGroupState()
+        let first = makeWindow(windowID: 1, identifier: 1001, frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let second = makeWindow(windowID: 2, identifier: 1002, frame: CGRect(x: 600, y: 0, width: 600, height: 800))
+        let windows = [first, second]
+
+        state.update(windows: windows)
+        let groupID = state.ensureGroup(for: first.key)
+        state.addWindow(second.key, toGroup: groupID)
+
+        let mutation = state.removeWindow(second.key)
+
+        XCTAssertEqual(
+            mutation,
+            .init(groupID: groupID, membersBefore: [first.key, second.key], membersAfter: [])
+        )
+        XCTAssertEqual(state.group(for: first, in: windows), [first])
+        XCTAssertEqual(state.group(for: second, in: windows), [second])
+    }
+
+    func testClearGroupRemovesAllMembers() {
+        let state = LayoutGroupState()
+        let first = makeWindow(windowID: 1, identifier: 1001, frame: CGRect(x: 0, y: 0, width: 600, height: 800))
+        let second = makeWindow(windowID: 2, identifier: 1002, frame: CGRect(x: 600, y: 0, width: 600, height: 800))
+        let third = makeWindow(windowID: 3, identifier: 1003, frame: CGRect(x: 1200, y: 0, width: 600, height: 800))
+        let windows = [first, second, third]
+
+        state.update(windows: windows)
+        let groupID = state.ensureGroup(for: first.key)
+        state.addWindow(second.key, toGroup: groupID)
+        state.addWindow(third.key, toGroup: groupID)
+
+        let mutation = state.clearGroup(containing: second.key)
+
+        XCTAssertEqual(
+            mutation,
+            .init(groupID: groupID, membersBefore: [first.key, second.key, third.key], membersAfter: [])
+        )
+        XCTAssertEqual(state.group(for: first, in: windows), [first])
+        XCTAssertEqual(state.group(for: second, in: windows), [second])
+        XCTAssertEqual(state.group(for: third, in: windows), [third])
+    }
+
     private func makeWindow(
         windowID: Int,
         identifier: UInt,

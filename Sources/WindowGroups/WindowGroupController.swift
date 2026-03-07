@@ -164,6 +164,86 @@ final class WindowGroupController {
         }
     }
 
+    func isFocusedWindowGrouped() -> Bool {
+        guard isAccessibilityTrusted else { return false }
+        return eventQueue.sync {
+            guard let focusedWindow = focusedWindowInfo() else { return false }
+            let windows = visibleWindows(includeOffscreen: manualModeEnabled)
+            logGroupInvalidations(layoutGroups.update(windows: windows))
+            return layoutGroups.group(for: focusedWindow, in: windows, updated: true).count > 1
+        }
+    }
+
+    func removeFocusedWindowFromGroup() {
+        withEventQueue {
+            guard isAccessibilityTrusted else {
+                logger.log("Remove focused from group skipped: accessibility not trusted.")
+                return
+            }
+            guard let focusedWindow = focusedWindowInfo() else {
+                logger.log("Remove focused from group skipped: focused window missing.")
+                return
+            }
+
+            let windows = visibleWindows(includeOffscreen: manualModeEnabled)
+            logGroupInvalidations(layoutGroups.update(windows: windows))
+            guard let mutation = layoutGroups.removeWindow(focusedWindow.key) else {
+                logger.log("Remove focused from group skipped: focused window not in a stored group.")
+                return
+            }
+
+            lastGroupKey = nil
+            lastTriggeredFocusedWindowKey = nil
+            manualMemberKeys.remove(focusedWindow.key)
+            if manualGroupID == mutation.groupID, mutation.membersAfter.isEmpty {
+                manualGroupID = nil
+                manualMemberKeys.subtract(mutation.membersBefore)
+            }
+
+            if mutation.membersAfter.count > 1 {
+                let remaining = mutation.membersAfter.map(\.description).joined(separator: ", ")
+                logger.log(
+                    "Stored group \(shortGroupID(mutation.groupID)) updated. Removed \(windowLabel(focusedWindow)). Remaining members: \(remaining)."
+                )
+            } else {
+                let previous = mutation.membersBefore.map(\.description).joined(separator: ", ")
+                logger.log(
+                    "Stored group \(shortGroupID(mutation.groupID)) deleted. Reason: removing \(windowLabel(focusedWindow)) left fewer than 2 members. Previous members: \(previous)."
+                )
+            }
+        }
+    }
+
+    func deleteFocusedWindowGroup() {
+        withEventQueue {
+            guard isAccessibilityTrusted else {
+                logger.log("Delete group skipped: accessibility not trusted.")
+                return
+            }
+            guard let focusedWindow = focusedWindowInfo() else {
+                logger.log("Delete group skipped: focused window missing.")
+                return
+            }
+
+            let windows = visibleWindows(includeOffscreen: manualModeEnabled)
+            logGroupInvalidations(layoutGroups.update(windows: windows))
+            guard let mutation = layoutGroups.clearGroup(containing: focusedWindow.key) else {
+                logger.log("Delete group skipped: focused window not in a stored group.")
+                return
+            }
+
+            lastGroupKey = nil
+            lastTriggeredFocusedWindowKey = nil
+            if manualGroupID == mutation.groupID {
+                manualGroupID = nil
+            }
+            manualMemberKeys.subtract(mutation.membersBefore)
+
+            let members = mutation.membersBefore.map(\.description).joined(separator: ", ")
+            logger.log("Stored group \(shortGroupID(mutation.groupID)) deleted. Members: \(members).")
+        }
+    }
+
     func dumpVisibleWindows() {
         guard isAccessibilityTrusted else {
             logger.log("Dump requested. Accessibility permission missing.")

@@ -13,6 +13,12 @@ final class LayoutGroupState {
         let reason: Reason
     }
 
+    struct GroupMutation: Equatable {
+        let groupID: UUID
+        let membersBefore: [WindowKey]
+        let membersAfter: [WindowKey]
+    }
+
     struct State {
         var frame: CGRect
         var lastMoved: Date
@@ -160,6 +166,30 @@ final class LayoutGroupState {
 
     func windows(inGroup groupID: UUID, from windows: [AXWindowInfo]) -> [AXWindowInfo] {
         windows.filter { states[$0.key]?.groupID == groupID }
+    }
+
+    func removeWindow(_ key: WindowKey) -> GroupMutation? {
+        guard let groupID = states[key]?.groupID else { return nil }
+        let membersBefore = members(inGroup: groupID)
+
+        if var state = states[key] {
+            state.groupID = nil
+            states[key] = state
+        }
+        clearGroupIfSingleton(groupID)
+
+        return GroupMutation(
+            groupID: groupID,
+            membersBefore: membersBefore,
+            membersAfter: members(inGroup: groupID)
+        )
+    }
+
+    func clearGroup(containing key: WindowKey) -> GroupMutation? {
+        guard let groupID = states[key]?.groupID else { return nil }
+        let membersBefore = members(inGroup: groupID)
+        clearGroup(groupID: groupID)
+        return GroupMutation(groupID: groupID, membersBefore: membersBefore, membersAfter: [])
     }
 
     private func clearGroup(groupID: UUID) {
